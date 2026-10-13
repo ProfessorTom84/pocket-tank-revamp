@@ -20,8 +20,8 @@
 
 #define PT_RELEASE_MAJOR 0
 #define PT_RELEASE_MINOR 3
-#define PT_RELEASE_PATCH 3
-#define PT_RELEASE       "0.3.3"
+#define PT_RELEASE_PATCH 4
+#define PT_RELEASE       "0.3.4"
 #define PT_RELEASE_STAGE "alpha"               /* pre-1.0: shown beside the number */
 #define PT_RELEASE_NUM   ((PT_RELEASE_MAJOR << 16) | (PT_RELEASE_MINOR << 8) | PT_RELEASE_PATCH)
 
@@ -48,6 +48,9 @@
 #elif defined(TANK_WATCH)
 #define PT_BOARD         "watch206"
 #define PT_BOARD_NAME    "ESP32-S3-Touch-AMOLED-2.06"
+#elif defined(TANK_SQUARE)
+#define PT_BOARD         "square216"
+#define PT_BOARD_NAME    "ESP32-S3-Touch-AMOLED-2.16"
 #else
 #define PT_BOARD         "amoled18"
 #define PT_BOARD_NAME    "ESP32-S3-Touch-AMOLED-1.8"

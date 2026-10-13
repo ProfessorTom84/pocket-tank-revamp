@@ -5,6 +5,7 @@
  * ~1 s (the pill answers a plug-in within a second); any I2C error or
  * absent battery hides the meter. */
 #include "battery_port.h"
+#include "display_port.h"      /* board_is_square */
 #include "driver/i2c_master.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -24,6 +25,44 @@ static int64_t s_last_us = -1;
 static float s_frac; static bool s_charging, s_valid;
 static uint8_t s_st1, s_st2;                     /* the last good STATUS1 / STATUS2 */
 static bool rd(uint8_t reg, uint8_t *val);
+/* the charge current table (REG 62 bits 4:0): 25 mA steps to 200 mA (code 8),
+ * then 100 mA steps from 300 (code 9) to 1000 (code 16) */
+static int icc_ma(int code) { return code <= 8 ? code * 25 : code <= 16 ? (code - 6) * 100 : 1000; }
+static int icc_code(int ma) { if (ma < 25) ma = 25; if (ma <= 200) return ma / 25; int c = ma / 100 + 6; return c > 16 ? 16 : c; }
+/* each board's charge current, by the cell its maker fits (mAh; batlog.h's
+ * BATLOG_CELL_MAH says the same): the 1.8 200, the pendant 500, the watch
+ * 400, the square 1000. The table has no step between 200 and 300 mA.
+ * Measured on the square, 2026-10-13 (director `charge <mA>`, at 83-85%):
+ * VBAT 4097 mV at 300 mA, 4150 at 500, 4192 at 700 - ~0.25 ohm in the pack's
+ * path, so the faster the current the EARLIER the cell meets 4.2 V and the
+ * taper starts (~85% at 500 mA, ~78% at 700, ~70% at 1000): past ~0.75 C
+ * the minutes saved are few. The source (a hub port) held 4.82 V at 1000 mA,
+ * never throttled; the die read 46 C at 300 mA and 51 C at 1000.
+ * The square ships at 500 mA, 0.5 C (Strato, 2026-10-13; 700 was tried on
+ * the bench): any USB port gives it with the tank running, and a keeper's
+ * own smaller cell on that connector stays at or under 1 C down to 500 mAh.
+ * A port that still cannot give it sags, and the chip's VINDPM (4.36 V)
+ * throttles the charge to what there is - slower, not a fault
+ * (docs/board-amoled-2.16.md). */
+static int board_charge_ma(void) {
+    if (board_is_square()) return 500;     /* 0.5 C */
+    if (board_is_round())  return 400;     /* 0.8 C */
+    if (board_is_watch())  return 300;     /* 0.75 C */
+    return 150;                            /* 0.75 C */
+}
+/* the end-of-charge and precharge currents (REG 63 / 61, bits 3:0, 25 mA
+ * steps to 200): the chip came up at 125 / 125-150 mA on all four boards
+ * (read 2026-10-13). An end current of 125 mA against the 1.8's 150 mA
+ * charge stops the charge as the taper begins, well short of full; and a
+ * precharge of 150 mA is 0.75 C into a 200 mAh cell found deeply drained.
+ * Both about a tenth of the cell, the usual rule. The lower end current
+ * makes the taper longer: fuller, not faster. */
+static int board_trickle_ma(void) {
+    if (board_is_square()) return 100;     /* 1000 mAh */
+    if (board_is_round())  return 50;      /* 500 mAh */
+    if (board_is_watch())  return 50;      /* 400 mAh */
+    return 25;                             /* 200 mAh */
+}
 
 bool battery_port_init(i2c_master_bus_handle_t bus) {
     if (!bus || i2c_master_probe(bus, AXP2101_ADDR, 50) != ESP_OK) {
@@ -37,13 +76,27 @@ bool battery_port_init(i2c_master_bus_handle_t bus) {
      * 1000 mA (code 16) top of the table - several C for the 200 mAh 302530
      * cell on this board. 0.5C = 100 mA (code 4; codes 0-8 are 25 mA steps)
      * charges it in ~2.5 h and is kind to it; 200 mA (code 8) is the 1C
-     * alternative. CV stays at the default 4.2 V (code 3). */
-    uint8_t icc;
+     * alternative. CV stays at the default 4.2 V (code 3).
+     * 2026-10-13, Strato: "all boards charging in nearly 2 hours". A full
+     * charge is about 1/C hours of constant current plus the taper, so ~0.75 C
+     * - per board, by its cell (board_charge_ma below). */
+    const int code = icc_code(board_charge_ma());
+    uint8_t icc, iin = 0xFF;
+    rd(0x16, &iin);                               /* the VBUS input limit (read only: 0 = 100 mA, 1 = 500, 2 = 900, 3 = 1000, 4 = 1500, 5 = 2000) */
     if (rd(0x62, &icc)) {
-        uint8_t wr[2] = { 0x62, (uint8_t)((icc & 0xE0) | 4) };
+        uint8_t wr[2] = { 0x62, (uint8_t)((icc & 0xE0) | code) };
         bool ok = i2c_master_transmit(s_dev, wr, 2, 100) == ESP_OK;
-        ESP_LOGI("battery", "AXP2101 fuel gauge up; charge current code %d -> %s", icc & 0x1F, ok ? "4 (100 mA)" : "unchanged (write failed)");
+        if (ok) ESP_LOGI("battery", "AXP2101 fuel gauge up; charge current code %d -> %d (%d mA); VBUS input limit code %d", icc & 0x1F, code, icc_ma(code), iin & 0x07);
+        else ESP_LOGI("battery", "AXP2101 fuel gauge up; charge current code %d unchanged (write failed)", icc & 0x1F);
     } else ESP_LOGI("battery", "AXP2101 fuel gauge up");
+    const uint8_t tc = (uint8_t)(board_trickle_ma() / 25);
+    for (int i = 0; i < 2; i++) {                 /* 61 precharge, 63 end of charge */
+        uint8_t reg = i ? 0x63 : 0x61, v = 0;
+        if (i2c_master_transmit_receive(s_dev, &reg, 1, &v, 1, 100) != ESP_OK) continue;
+        uint8_t w[2] = { reg, (uint8_t)((v & 0xF0) | tc) };
+        if (i2c_master_transmit(s_dev, w, 2, 100) == ESP_OK)
+            ESP_LOGI("battery", "%s current %d -> %d mA", i ? "end-of-charge" : "precharge", (v & 0x0F) * 25, tc * 25);
+    }
     return true;
 }
 
@@ -191,6 +244,44 @@ int battery_port_vbat_mv(void) {
     uint8_t h, l;
     if (!s_dev || !rd(0x34, &h) || !rd(0x35, &l)) return 0;
     return ((h & 0x1F) << 8) | l;                     /* 13-bit, 1 mV/LSB (XPowersLib readRegisterH5L8) */
+}
+
+/* the charger, live (director `charge [mA]`): what is set, what the chip
+ * says it is doing, and what the source looks like under it. The three ADC
+ * channels (VBUS, VSYS, the die's temperature) are switched on for the read
+ * and put back: they are off the rest of the time (the battery pass). */
+int battery_port_charge_ma(void) { uint8_t v; return s_dev && rd(0x62, &v) ? icc_ma(v & 0x1F) : 0; }
+bool battery_port_set_charge_ma(int ma) {
+    uint8_t v; if (!s_dev || !rd(0x62, &v)) return false;
+    return wr(0x62, (uint8_t)((v & 0xE0) | icc_code(ma)));
+}
+static int adc14(uint8_t reg) { uint8_t h = 0, l = 0; return rd(reg, &h) && rd(reg + 1, &l) ? ((h & 0x3F) << 8) | l : 0; }
+void battery_port_charge_report(void) {
+    if (!s_dev) { ESP_LOGW("battery", "no AXP2101"); return; }
+    uint8_t adc = 0, st1 = 0, st2 = 0, icc = 0, dpm = 0, iin = 0, pre = 0, term = 0, cv = 0, pct = 0;
+    rd(0x30, &adc); wr(0x30, adc | 0x1C);
+    /* channels found off keep their LAST reading until a new one lands (the
+       1.8, 10-13: die 34.0 C and VSYS 4296 mV on every ask through a whole
+       charge), and a channel never read holds 0 (the pendant and the watch:
+       "385.7 C"). So: a second and a half for fresh ones, then on until
+       none is empty. */
+    int vbus = 0, vsys = 0, traw = 0;
+    vTaskDelay(pdMS_TO_TICKS(1500));
+    for (int i = 0; i < 50; i++) {
+        vbus = adc14(0x38); vsys = adc14(0x3A); traw = adc14(0x3C);
+        if (traw && vbus && vsys) break;
+        vTaskDelay(pdMS_TO_TICKS(40));
+    }
+    wr(0x30, adc);
+    rd(REG_STATUS1, &st1); rd(REG_STATUS2, &st2); rd(0x62, &icc); rd(0x15, &dpm); rd(0x16, &iin);
+    rd(0x61, &pre); rd(0x63, &term); rd(0x64, &cv); rd(REG_BAT_PERCENT, &pct);
+    static const char *ST[8] = { "trickle", "precharge", "CONSTANT CURRENT", "constant voltage (taper)", "done", "not charging", "?", "?" };
+    static const int IIN[8] = { 100, 500, 900, 1000, 1500, 2000, 0, 0 };
+    ESP_LOGI("battery", "charge: set %d mA (code %d) | %s%s%s%s | VBUS %d mV (input limit %d mA, VINDPM %d mV) | VSYS %d mV | VBAT %d mV %d%% | die %.1f C%s | precharge %d mA, end %d mA, CV code %d",
+             icc_ma(icc & 0x1F), icc & 0x1F, ST[st2 & 7], (st2 >> 3) & 1 ? ", THROTTLED: the source sags (VINDPM)" : "",
+             st1 & 1 ? ", at the input current limit" : "", (st1 >> 1) & 1 ? ", THERMAL regulation" : "",
+             vbus, IIN[iin & 7], 3880 + (dpm & 0x0F) * 80, vsys, battery_port_vbat_mv(), pct, traw ? 22.0 + (7274 - traw) / 20.0 : 0.0, traw ? "" : " (NO READING: ask again)",
+             (pre & 0x0F) * 25, (term & 0x0F) * 25, cv & 7);
 }
 
 void battery_port_dump(void) {

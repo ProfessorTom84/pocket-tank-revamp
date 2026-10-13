@@ -1,6 +1,6 @@
-# Three boards, one tank: how a change reaches all of them
+# Four boards, one tank: how a change reaches all of them
 
-Since 2026-10-01 the tank runs on three boards. This file is the rule for
+Since 2026-10-01 the tank runs on three boards, since 2026-10-12 on four. This file is the rule for
 changing anything they share - read it before a feature, the way DEVICE.md is
 read before a flash.
 
@@ -11,9 +11,10 @@ read before a flash.
 | Waveshare 1.8 AMOLED (the tank, the reference) | 448 x 368, round corners | default | `make` -> `fishsim` | `tools/flash.sh` (preflight; build dir `fw-build`) | port, `TANK_PORT=` with several on USB |
 | Waveshare 1.75C (the bowl) | 466 circle | `TANK_ROUND` | `make ROUND=1` -> `fishsim-round` | `tools/flash_round.sh` (`fw-build-175c`) | its USB serial (`ROUND_SERIAL`, tools/boards.local.sh) |
 | Waveshare 2.06 (the watch) | 410 x 502 portrait, 100 px corners | `TANK_WATCH` | `make WATCH=1` -> `fishsim-watch` | `tools/flash_watch.sh` (`fw-build-206`) | its USB serial (`WATCH_SERIAL`, tools/boards.local.sh) |
+| Waveshare 2.16 (the square, 2026-10-12) | 480 x 480, ~40 px corners | `TANK_SQUARE` | `make SQUARE=1` -> `fishsim-square` | `tools/flash_square.sh` (`fw-build-216`) | its USB serial (`SQUARE_SERIAL`, tools/boards.local.sh) |
 
 Each board's own traps are in its doc (board-amoled-1.75c.md,
-board-amoled-2.06-watch.md).
+board-amoled-2.06-watch.md, board-amoled-2.16.md).
 
 ## What is shared, and where a board may differ
 
@@ -39,14 +40,14 @@ pixel instead of a name - fix that instead.
 1. **Write it once, in `common/`.** The platforms only route: the page
    returns what was tapped (`MS_TAP_*`, `SHOP_TAP_*`, ...), the sim's loop and
    the firmware's touch port do the same few lines with it. The route is
-   written twice (sim/main.c and touch_port_ft3168.c + main.c - the three
+   written twice (sim/main.c and touch_port_ft3168.c + main.c - the four
    boards share the firmware's), so keep it to a call or two and put the
    behavior behind it. Sounds go through `tank_emit`, not through the
    platform.
 2. **Lay new page elements out in the box every glass shows whole:** PAGE
    x 56..392, y 60..300 (the modal's box). The watch shows PAGE x 19..428, the
    bowl's circle is at least that wide between those rows; the corners of the
-   page belong to the bezel on two boards out of three. A page that must use
+   page belong to the bezel on three boards out of four. A page that must use
    the corners gets a layout block per board (the milestones page's
    `MSP_*`), not scattered conditions.
 3. **Give the layout a voice.** A test, the director or a tool that needs to
@@ -56,12 +57,12 @@ pixel instead of a name - fix that instead.
    test for one board.
 4. **A save field only ever appends** (progression.c's SAVE LAYOUT LOCK), and
    the save means the same on every board.
-5. **Nothing is done until all three say so:**
+5. **Nothing is done until all four say so:**
 
    | step | command (from the project root) | what it proves |
    |---|---|---|
-   | the checks | `make -C pocket-tank/sim check-all` | every selftest on all three worlds |
-   | the pictures | `pocket-tank/tools/board_sheet.py --selftest-card` (or `--snapshot 20`) | the same page on three glasses, side by side, cut to each glass |
+   | the checks | `make -C pocket-tank/sim check-all` | every selftest on all four worlds |
+   | the pictures | `pocket-tank/tools/board_sheet.py --selftest-card` (or `--snapshot 20`) | the same page on four glasses, side by side, cut to each glass |
    | the firmware | `pocket-tank/tools/flash.sh` builds the 1.8; `flash_round.sh --build-only`, `flash_watch.sh --build-only` | it compiles for each board; compare `.bss` with the last flashed build (internal RAM is ~23 KB) |
    | the glass | flash the 1.8 first (it is the reference and has the preflight), then the other two | Strato's finger |
 
@@ -78,9 +79,9 @@ the bowl and the watch ship in 0.3.0; nothing public until the release):
 |---|---|
 | the board's id | `common/version.h` `PT_BOARD`: `amoled18`, `round175c`, `watch206` (from `TANK_ROUND` / `TANK_WATCH`) |
 | the image | a board marker right after the app descriptor (`net_port_esp.c` `pt_board_marker`, at `PT_BOARD_MARKER_OFFSET` 0x120; kept by `-u pt_board_marker` in firmware/main/CMakeLists.txt). `tools/pt_boards.py` reads it back from a `.bin` |
-| over the air | each board fetches `latest-<PT_BOARD>.json`; `common/update.c` refuses a manifest whose `board` is another (WRONG BOARD, never offered); the download reads the marker back from the slot at its first 4 KB and aborts on another board's (`NET_ERR_BOARD`) - all three share the signing key, so the signature alone would let a bowl install the 1.8's image |
+| over the air | each board fetches `latest-<PT_BOARD>.json`; `common/update.c` refuses a manifest whose `board` is another (WRONG BOARD, never offered); the download reads the marker back from the slot at its first 4 KB and aborts on another board's (`NET_ERR_BOARD`) - all four share the signing key, so the signature alone would let a bowl install the 1.8's image |
 | the release | `.github/workflows/release.yml` builds `firmware/build`, `build-round`, `build-watch`; `make_ota_manifest.py` names both files from the image's marker (`latest-<board>.json`, `pocket_tank-v<rel>-<board>.bin`) |
-| the installer | `installer.yml` builds the three; `make_installer.py --build-dir <1.8> --board-build <round> --board-build <watch>`: the 1.8 keeps `manifest.json` / `manifest-erase.json`, the others `manifest-<board>[-erase].json`; a board's file that differs from the 1.8's is `<name>-<board>.bin`. The page shows a "Pick your board" step when it carries more than one |
+| the installer | `installer.yml` builds the four; `make_installer.py --build-dir <1.8> --board-build <round> --board-build <watch> --board-build <square>`: the 1.8 keeps `manifest.json` / `manifest-erase.json`, the others `manifest-<board>[-erase].json`; a board's file that differs from the 1.8's is `<name>-<board>.bin`. The page shows a "Pick your board" step when it carries more than one |
 | pocketank.com/install | `tools/build_site.py` offers a board only once its manifest is LIVE on GitHub Pages - the public resync is the release, so a site publish before it shows the 1.8 alone |
 
 Nothing reaches the public before the release: the dev repo is private, the

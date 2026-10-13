@@ -12,9 +12,9 @@
 #include <stdint.h>
 #include "tank.h"
 
-#define PLAN_FB_W            TANK_W                               /* 448 x 368; the round build's bowl is 466 x 466, the watch's tank 410 x 502 */
+#define PLAN_FB_W            TANK_W                               /* 448 x 368; the round build's bowl is 466 x 466, the watch's tank 410 x 502, the square's 480 x 480 */
 #define PLAN_FB_H            TANK_H
-#define PLAN_FB_BYTES        (PLAN_FB_W * PLAN_FB_H * 2)          /* 329,728 (434,312; 411,640) */
+#define PLAN_FB_BYTES        (PLAN_FB_W * PLAN_FB_H * 2)          /* 329,728 (434,312; 411,640; 460,800) */
 #define PLAN_FB_ALLOC        ((PLAN_FB_BYTES + 63) & ~63)         /* what a frame buffer is allocated as: the scene prefetch's
                                                                      DMA copies whole 64-byte lines (the bowl's 434,312 is not one) */
 #define PLAN_FB_COUNT        2                                    /* double buffer */

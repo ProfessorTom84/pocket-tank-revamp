@@ -16,6 +16,7 @@ SDL_LIBS   := $(shell sdl2-config --libs)
 # `make ROUND=1`: the round 466 px bowl (the Waveshare 1.75C's world) as
 # ./fishsim-round, built beside the rectangle's in build-round/.
 # `make WATCH=1`: the watch's 410 x 502 portrait tank (the Waveshare 2.06) as ./fishsim-watch
+# `make SQUARE=1`: the square's 480 x 480 tank (the Waveshare 2.16) as ./fishsim-square
 ifdef ROUND
 BUILD   := build-round
 OUT     := fishsim-round
@@ -24,6 +25,10 @@ else ifdef WATCH
 BUILD   := build-watch
 OUT     := fishsim-watch
 ROUNDF  := -DTANK_WATCH
+else ifdef SQUARE
+BUILD   := build-square
+OUT     := fishsim-square
+ROUNDF  := -DTANK_SQUARE
 else
 BUILD   := build
 OUT     := fishsim
@@ -51,9 +56,9 @@ ifdef NOMODEL
 SELFTESTS := $(filter-out --selftest-llm,$(SELFTESTS))
 endif
 
-# `make check` tests the rectangle; `make ROUND=1 check` / `make WATCH=1 check`
-# the same selftests in that board's world; `make check-all` all three - the
-# gate for anything in common/ (docs/BOARDS.md)
+# `make check` tests the rectangle; `make ROUND=1 check` / `make WATCH=1 check` /
+# `make SQUARE=1 check` the same selftests in that board's world; `make check-all`
+# all four - the gate for anything in common/ (docs/BOARDS.md)
 check: $(OUT)
 	@set -e; for test in $(SELFTESTS); do echo "RUN $(OUT) $$test"; ./$(OUT) "$$test"; done
 
@@ -61,6 +66,7 @@ check-all:
 	$(MAKE) check
 	$(MAKE) ROUND=1 check
 	$(MAKE) WATCH=1 check
+	$(MAKE) SQUARE=1 check
 
 check-nomodel:
 	$(MAKE) NOMODEL=1 check
@@ -78,7 +84,7 @@ $(BUILD)/%.o: %.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	rm -rf build build-round build-watch fishsim fishsim-round fishsim-watch
+	rm -rf build build-round build-watch build-square fishsim fishsim-round fishsim-watch fishsim-square
 
 -include $(OBJS:.o=.d)
 

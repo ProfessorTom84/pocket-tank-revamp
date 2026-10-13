@@ -17,7 +17,7 @@ cd "$(dirname "$0")/.."
 [ -f tools/boards.local.sh ] && . tools/boards.local.sh   # your boards' USB serials (not tracked)
 SERIAL=${ROUND_SERIAL:-}
 [ -n "$SERIAL" ] || { echo "flash_round: set ROUND_SERIAL=<the board's USB serial> (in tools/boards.local.sh, or the environment)"; exit 1; }
-B=~/.cache/pocket-tank/fw-build-175c
+B=${TANK_BUILD:-~/.cache/pocket-tank/fw-build-175c}   # another checkout (a worktree) builds in its own dir: a build dir is tied to its source path
 . ~/esp/esp-idf/export.sh > /dev/null 2>&1 || { echo "flash_round: ESP-IDF export failed"; exit 1; }
 [ -f firmware/keys/ota_signing_key.pem ] || { echo "flash_round: no firmware/keys/ota_signing_key.pem - tools/ota_key.sh"; exit 1; }
 LOG=$(mktemp); trap 'rm -f "$LOG"' EXIT

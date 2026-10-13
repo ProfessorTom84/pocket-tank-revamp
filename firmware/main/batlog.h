@@ -8,7 +8,15 @@
 #define BATLOG_H
 #include <stdbool.h>
 #include <stdint.h>
-#define BATLOG_CELL_MAH 200
+#if defined(TANK_SQUARE)
+#define BATLOG_CELL_MAH 1000   /* the square's pack (Strato, 2026-10-12) */
+#elif defined(TANK_ROUND)
+#define BATLOG_CELL_MAH 500    /* the pendant's (2026-10-03) */
+#elif defined(TANK_WATCH)
+#define BATLOG_CELL_MAH 400    /* the watch's (2026-10-03) */
+#else
+#define BATLOG_CELL_MAH 200    /* the 1.8's; the log's mA column and its mAh totals scale with it */
+#endif
 /* at boot, before the first sample: validates the RTC ring (magic + crc) and
    returns how many samples came through the reset - 0 after a power-on */
 int  batlog_init(void);

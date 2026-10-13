@@ -29,21 +29,23 @@ pipeline that made it, a PC simulator, and the firmware for a real board.
 Got the board? **[Install it from your browser](https://pocketank.com/install/)**,
 no toolchain needed.
 
-The current release is **v0.3.3** (alpha); the settings page shows the one
+The current release is **v0.3.4** (alpha); the settings page shows the one
 on your tank. What changed in each release:
 **[pocketank.com/updates](https://pocketank.com/updates/)**.
 
-It runs on three Waveshare boards: the 1.8-inch original, the round
+It runs on four Waveshare boards: the 1.8-inch original, the round
 1.75-inch **pendant**, where the tank fills the whole circle like a little
-fishbowl, and the 2.06-inch **watch**, a tall tank you can wear. Same fish,
-same shop, same saves on all three. From 0.3 on a tank updates itself
-over Wi-Fi, so the cable is only for the first install.
+fishbowl, the 2.06-inch **watch**, a tall tank you can wear, and the
+2.16-inch **square**, the biggest screen of the four in a little white box.
+Same fish, same shop, same saves on all four. From 0.3 on a tank updates
+itself over Wi-Fi, so the cable is only for the first install. Each board
+charges at a current sized for its own battery (0.3.4).
 
-| The 1.8 | The pendant | The watch |
-|:---:|:---:|:---:|
-| <img src="docs/media/board-amoled18.webp" width="220" alt="The Waveshare 1.8-inch board from the front: a black rectangle with rounded corners"> | <img src="docs/media/board-round175c.webp" width="220" alt="The Waveshare 1.75C board from the front: a round screen in a silver aluminum ring"> | <img src="docs/media/board-watch206.webp" width="220" alt="The Waveshare 2.06-inch watch on its strap"> |
+| The 1.8 | The pendant | The watch | The square |
+|:---:|:---:|:---:|:---:|
+| <img src="docs/media/board-amoled18.webp" width="220" alt="The Waveshare 1.8-inch board from the front: a black rectangle with rounded corners"> | <img src="docs/media/board-round175c.webp" width="220" alt="The Waveshare 1.75C board from the front: a round screen in a silver aluminum ring"> | <img src="docs/media/board-watch206.webp" width="220" alt="The Waveshare 2.06-inch watch on its strap"> | <img src="docs/media/board-amoled216.webp" width="220" alt="The Waveshare 2.16-inch board from the front: a square screen in a white case"> |
 
-![The same tank on the 1.8, the pendant and the watch](docs/media/sim-three-boards.png)
+![The same tank on the 1.8, the pendant, the watch and the square](docs/media/sim-four-boards.png)
 
 ## Contents
 
@@ -556,7 +558,7 @@ touch ports are stubs in the QEMU overlay; decisions go to the log.
 
 The easy way onto a board: **https://pocketank.com/install/**.
 Plug the Waveshare board into your computer, open the page in Chrome or Edge,
-pick your board (the 1.8, the pendant or the watch), click *Install Pocket
+pick your board (the 1.8, the pendant, the watch or the square), click *Install Pocket
 Tank*, pick the port, and watch the bar fill. Then the page asks for your
 Wi-Fi: the tank's screen stays dark while it lists the networks it can see,
 you pick yours and type the password, and the tank connects to check it
@@ -594,7 +596,7 @@ vendored flasher). Any HTTPS static host will do, GitHub Pages included;
 
 ## Run it on real hardware
 
-Three Waveshare boards are supported, all ESP32-S3R8 with 16 MB flash and
+Four Waveshare boards are supported, all ESP32-S3R8 with 16 MB flash or more and
 8 MB PSRAM, an AMOLED, capacitive touch, an IMU and a PMIC:
 
 | Board | Glass | Build |
@@ -602,9 +604,10 @@ Three Waveshare boards are supported, all ESP32-S3R8 with 16 MB flash and
 | **ESP32-S3-Touch-AMOLED-1.8** (V1 and V2, auto-detected) | 368×448, shown as a 448×368 tank | the default |
 | **ESP32-S3-Touch-AMOLED-1.75C**, the pendant | 466 px circle | `sdkconfig.round` |
 | **ESP32-S3-Touch-AMOLED-2.06**, the watch | 410×502, portrait | `sdkconfig.watch` |
+| **ESP32-S3-Touch-AMOLED-2.16**, the square | 480×480 | `sdkconfig.square` |
 
 Each board's touch panel is calibrated in its touch port, so a tap lands
-where the finger is. [docs/BOARDS.md](docs/BOARDS.md) has what the three
+where the finger is. [docs/BOARDS.md](docs/BOARDS.md) has what the four
 share and where they differ; each board's own traps are in its doc. The
 browser installer above is the no-toolchain path; this is the developer one.
 
@@ -615,12 +618,13 @@ idf.py -p /dev/cu.usbmodem* flash
 esptool.py --chip esp32s3 -p /dev/cu.usbmodem* write_flash 0x290000 ../model/out/model_q4.bin
 ```
 
-The other two boards build from the same tree on top of their own fragment,
+The other three boards build from the same tree on top of their own fragment,
 each in its own build directory:
 
 ```bash
 idf.py -B build-round -DSDKCONFIG=build-round/sdkconfig "-DSDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.round" build
 idf.py -B build-watch -DSDKCONFIG=build-watch/sdkconfig "-DSDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.watch" build
+idf.py -B build-square -DSDKCONFIG=build-square/sdkconfig "-DSDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.square" build
 ```
 
 Every build is signed, so the first build needs a key: `tools/ota_key.sh`
@@ -636,7 +640,7 @@ explains where every kilobyte goes. The boot log prints a per-stage frame
 profile and per-decision inference timings, so performance work is
 measurable without instruments.
 
-**Other boards.** This repo supports those three boards, to keep the project small
+**Other boards.** This repo supports those four boards, to keep the project small
 while it is young. Two community ports run the tank elsewhere. They are not
 built or tested here, and they may lag behind this repo:
 
@@ -682,7 +686,7 @@ seven-minute prompt check before an overnight run is always worth it.
   tokenizer, the shared encoder)
 - `sim/` — the LVGL + SDL2 simulator, its persistence port, and the self-tests
 - `firmware/` — ESP-IDF app: display, touch, battery, IMU, RTC and audio
-  ports for the three Waveshare boards, the on-device advisor scheduler,
+  ports for the four Waveshare boards, the on-device advisor scheduler,
   update mode and its Wi-Fi port, the QEMU harness, and the partition table
 - `model/` — the frozen [state/goal schema](model/schema.md), trace
   generation, training, evaluation, probes, and the 4-bit export
@@ -690,7 +694,7 @@ seven-minute prompt check before an overnight run is always worth it.
   bundle; `tools/make_installer.py` assembles the upload folder
 - `tools/` — the icon baker, the sound bank builder, the installer
   assembler, the release manifest maker, the touch calibration fitter, the
-  three-board picture sheet, and a serial bench client
+  four-board picture sheet, and a serial bench client
 - `assets/icons/` — the pixel-art source for the stats card, the badges,
   the shop and the snail
 - `assets/sounds/` — the cues (16 kHz mono) and their levels
@@ -707,9 +711,10 @@ seven-minute prompt check before an overnight run is always worth it.
 - [docs/retrain-v3.md](docs/retrain-v3.md) — the schema v3 retrain runbook
 - [docs/retrain-v4.md](docs/retrain-v4.md) — the schema v4 (boredom) retrain runbook and its numbers
 - [docs/DEVICE.md](docs/DEVICE.md) — what is in flight on the device, and the flash rule
-- [docs/BOARDS.md](docs/BOARDS.md) — the three boards: what is shared, where one may differ, how a release keeps each to its own image
+- [docs/BOARDS.md](docs/BOARDS.md) — the four boards: what is shared, where one may differ, how a release keeps each to its own image
 - [docs/board-amoled-1.75c.md](docs/board-amoled-1.75c.md) — the pendant's bring-up notes
 - [docs/board-amoled-2.06-watch.md](docs/board-amoled-2.06-watch.md) — the watch's bring-up notes
+- [docs/board-amoled-2.16.md](docs/board-amoled-2.16.md) — the square's bring-up notes
 - [docs/OTA.md](docs/OTA.md) — updates over Wi-Fi: the partition table, update mode, signing, the manifest
 - [docs/AUDIO.md](docs/AUDIO.md) — the sound design: the cues, the asset pipeline, the power rules
 - [docs/memory_budget.md](docs/memory_budget.md) — flash, PSRAM, and SRAM plan

@@ -106,6 +106,9 @@ bool imu_port_init(i2c_master_bus_handle_t bus) {
        the panel's long axis is X, its foot +X. Nothing reads it: on a wrist the live flip never
        runs (main.c), the way up is settings SCREEN (tank.h) */
     else if (board_is_watch()) { s_up_axis = 0; s_up_sign = 1; }
+    /* the square, 2026-10-12 (Strato holding it his usual way, the USB at the foot, tilted back): g = [1166 13033 10739] -
+       gravity runs +Y in that grip: up = +Y (the 1.8's is -Y) */
+    else if (board_is_square()) { s_up_axis = 1; s_up_sign = 1; }
     ESP_LOGI(TAG, "QMI8658 up at 0x%02x: orientation axis %c%s", addr,
              IMU_UP_SIGN > 0 ? '+' : '-', IMU_UP_AXIS == 0 ? "X" : IMU_UP_AXIS == 1 ? "Y" : "Z");
     return true;

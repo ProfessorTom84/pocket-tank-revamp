@@ -99,6 +99,9 @@ void render_stats_card(const tank_t *t, int fish_idx, uint16_t *fb, int stride);
 #elif defined(TANK_WATCH)       /* the watch: in from its round corner */
 #define RENDER_CARD_X 36
 #define RENDER_CARD_Y 36
+#elif defined(TANK_SQUARE)      /* the square: its bezel's corner clipped the card at the 1.8's 14 / 8 (Strato, 2026-10-12) */
+#define RENDER_CARD_X 26
+#define RENDER_CARD_Y 22
 #else
 #define RENDER_CARD_X 14
 #define RENDER_CARD_Y 8
@@ -151,6 +154,9 @@ bool render_tool_chip_hit(const tank_t *t, float x, float y);
 #define RENDER_BAT_Y 16
 #elif defined(TANK_WATCH)       /* the watch: the top right, in from its round corner */
 #define RENDER_BAT_X (TANK_W - RENDER_BAT_W - 56)
+#define RENDER_BAT_Y 22
+#elif defined(TANK_SQUARE)      /* the square: in from its bezel's corner, like the card */
+#define RENDER_BAT_X (TANK_W - RENDER_BAT_W - 44)
 #define RENDER_BAT_Y 22
 #else
 #define RENDER_BAT_X (TANK_W - RENDER_BAT_W - 28)     /* clear of the curved bezel; the bolt sits left of it */

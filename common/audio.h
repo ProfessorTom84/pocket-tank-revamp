@@ -27,7 +27,12 @@
 
 #define AUDIO_VOICES     4
 #define AUDIO_MAX_PER_S  6
+#ifdef TANK_SQUARE
+#define AUDIO_MASTER_DB  (-12)    /* the square's box drives its speaker harder: at the 1.8's -6 "a little loud, slightly blown
+                                   * out"; its old quiet (-18) was right as normal (Strato by ear, 2026-10-12) */
+#else
 #define AUDIO_MASTER_DB  (-6)     /* headroom under the NS4150B's fixed gain; tune on the bench */
+#endif
 #define AUDIO_PITCH_ONE  256      /* pitch_q8 = 256 plays a clip at its own rate */
 
 void audio_init(const int16_t *bank, uint32_t n_samples);

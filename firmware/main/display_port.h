@@ -48,6 +48,11 @@ bool board_has_expander(void);                  /* the 1.8, positively: its IO e
  * panel, sent unturned; the rectangle image still runs on it the 1.8's way -
  * its 448 x 368 frame turned 90 degrees, centred in the glass. */
 bool board_is_watch(void);
+/* the SQUARE (Waveshare 2.16, 480 x 480), GPIO resets like the round board's;
+ * its own build (TANK_SQUARE) is a tank that IS the panel, sent unturned */
+bool board_is_square(void);
+void display_port_set_madctl(uint8_t v);         /* the square: the panel's orientation register (0x36), live */
+uint8_t display_port_madctl(void);
 int  board_pwr_sense_pin(void);                 /* the GPIO that is high while the PWR key is down (the 1.75C: 3, the watch: 10), -1 = none */
 /* a portrait panel bigger than the frame (the rectangle image on the watch):
  * where the frame's corner sits on the panel, in panel px (0, 0 otherwise) */

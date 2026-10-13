@@ -16,7 +16,10 @@
  * directly over I2C; its panel px go through the display port's view
  * (display_port_panel_to_tank) and everything after that is the same.
  * The WATCH (2.06, 2026-10-02) has the FT3168 of the 1.8's V1 board, its
- * reset on a GPIO. Its own build is a portrait tank: panel px = tank px. */
+ * reset on a GPIO. Its own build is a portrait tank: panel px = tank px.
+ * The SQUARE (2.16, 2026-10-12) has a CST9220 - the round board's CST9217
+ * family, read the same way, on its own reset pin and a 480 px panel; its own
+ * build is the panel too. Which way its report runs is `touch mirror`. */
 #include "touch_port.h"
 #include "display_port.h"
 #include "update.h"
@@ -78,16 +81,30 @@ extern bool board_is_v2(void);
  * x = b1:b3.hi, y = b2:b3.lo, 12 bits each, in panel px - mirrored on both
  * axes against the picture (Waveshare's BSP sets mirror_x and mirror_y). */
 static i2c_master_dev_handle_t s_cst;
+static gpio_num_t cst_rst(void) { return board_is_square() ? S_PIN_TP_RST : R_PIN_TP_RST; }
+static int cst_panel(void) { return board_is_square() ? S_PANEL : R_PANEL; }
+/* how the chip's report runs against the picture: bit 0 = x mirrored, bit 1 = y
+ * mirroring, bit 2 = the axes swapped. The round board's is 3 (both mirrored,
+ * Waveshare's BSP sets mirror_x and mirror_y); the square's is 5 (the axes
+ * swapped, then x mirrored - fitted as 6 from Strato's taps on the first-run
+ * NEXT with the picture at MADCTL 0x60, then turned with the picture to
+ * 0xA0, USB-down, 2026-10-12). Director `touch mirror <n>` tries another live. */
+#define CST_MIRROR_ROUND  3
+#define CST_MIRROR_SQUARE 5
+static int s_cst_mirror = CST_MIRROR_ROUND;
+void touch_port_set_mirror(int m) { if (m >= 0) s_cst_mirror = m & 7; }
+int  touch_port_mirror(void) { return s_cst_mirror; }
 static bool cst9217_init(void) {
-    gpio_config_t rst = { .pin_bit_mask = 1ULL << R_PIN_TP_RST, .mode = GPIO_MODE_OUTPUT };
-    gpio_config(&rst); gpio_sleep_sel_dis(R_PIN_TP_RST);
-    gpio_set_level(R_PIN_TP_RST, 0); vTaskDelay(pdMS_TO_TICKS(10));
-    gpio_set_level(R_PIN_TP_RST, 1); vTaskDelay(pdMS_TO_TICKS(50));
+    s_cst_mirror = board_is_square() ? CST_MIRROR_SQUARE : CST_MIRROR_ROUND;
+    gpio_config_t rst = { .pin_bit_mask = 1ULL << cst_rst(), .mode = GPIO_MODE_OUTPUT };
+    gpio_config(&rst); gpio_sleep_sel_dis(cst_rst());
+    gpio_set_level(cst_rst(), 0); vTaskDelay(pdMS_TO_TICKS(10));
+    gpio_set_level(cst_rst(), 1); vTaskDelay(pdMS_TO_TICKS(50));
     if (i2c_master_probe(board_i2c_bus(), I2C_ADDR_CST9217, 50) != ESP_OK) { ESP_LOGW(TAG, "no CST9217"); return false; }
     i2c_device_config_t cfg = { .dev_addr_length = I2C_ADDR_BIT_LEN_7, .device_address = I2C_ADDR_CST9217, .scl_speed_hz = 400000,
                                 .flags.disable_ack_check = 1 };   /* it NACKs a read now and then while it scans: not an error, and not a log line each */
     if (i2c_master_bus_add_device(board_i2c_bus(), &cfg, &s_cst) != ESP_OK) { s_cst = NULL; return false; }
-    ESP_LOGI(TAG, "CST9217 ready");
+    ESP_LOGI(TAG, "CST92%s ready", board_is_square() ? "20 (the square)" : "17");
     return true;
 }
 /* the night (2026-10-02): the chip's own sleep instead of its reset held low
@@ -97,7 +114,7 @@ static bool cst9217_init(void) {
  * reset brings it back: the wake is a reboot, and cst9217_init pulses it. */
 bool touch_port_deep_sleep(void) {
     if (!s_cst) return false;
-    gpio_set_level(R_PIN_TP_RST, 1); vTaskDelay(pdMS_TO_TICKS(150));
+    gpio_set_level(cst_rst(), 1); vTaskDelay(pdMS_TO_TICKS(150));
     static const uint8_t open[2] = { 0xD1, 0x1E }, dbg[2] = { 0xD1, 0x01 }, slp[2] = { 0xD1, 0x05 }, where[2] = { 0x00, 0x02 };
     uint8_t r[4] = { 0 };
     bool open_ok = false;
@@ -112,7 +129,7 @@ bool touch_port_deep_sleep(void) {
     bool ok = i2c_master_transmit(s_cst, slp, 2, 20) == ESP_OK && open_ok && dbg_ok;
     ESP_LOGI(TAG, "CST9217 sleep: command mode %s, debug mode %s -> %s", open_ok ? "ok" : "NO ECHO", dbg_ok ? "ok" : "NO ECHO",
              ok ? "asleep, reset held high" : "not confirmed: back into reset for the night");
-    if (!ok) gpio_set_level(R_PIN_TP_RST, 0);
+    if (!ok) gpio_set_level(cst_rst(), 0);
     return ok;
 }
 /* A press is one press: the chip answers some reads mid-touch with nothing (no
@@ -148,10 +165,11 @@ static bool cst9217_read(uint16_t *x, uint16_t *y) {
         said = d[6] == 0xAB && d[0] != 0xAB && !finger;      /* a report, and no finger in it */
     }
     if (finger) {
-        int rx = (d[1] << 4) | (d[3] >> 4), ry = (d[2] << 4) | (d[3] & 0x0F);
-        if (rx > R_PANEL - 1) rx = R_PANEL - 1;
-        if (ry > R_PANEL - 1) ry = R_PANEL - 1;
-        lx = (uint16_t)(R_PANEL - 1 - rx); ly = (uint16_t)(R_PANEL - 1 - ry);
+        int rx = (d[1] << 4) | (d[3] >> 4), ry = (d[2] << 4) | (d[3] & 0x0F), pn = cst_panel();
+        if (s_cst_mirror & 4) { int tmp = rx; rx = ry; ry = tmp; }
+        if (rx > pn - 1) rx = pn - 1;
+        if (ry > pn - 1) ry = pn - 1;
+        lx = (uint16_t)((s_cst_mirror & 1) ? pn - 1 - rx : rx); ly = (uint16_t)((s_cst_mirror & 2) ? pn - 1 - ry : ry);
         if (!down) { s_cst_gaps = s_cst_said = s_cst_back = s_cst_maxgap_ms = 0; said_in = false;
                      s_cst_again_ms = lift_us ? (int)((now - lift_us) / 1000) : -1; }
         else {
@@ -220,7 +238,7 @@ static bool panel_read(uint16_t *x, uint16_t *y) {
 }
 
 bool touch_port_init(void) {
-    if (board_is_round()) return cst9217_init();
+    if (board_is_round() || board_is_square()) return cst9217_init();
     if (board_is_watch()) return ft3168_init();
     esp_lcd_panel_io_handle_t io;
     bool v2 = board_is_v2();
@@ -313,6 +331,34 @@ bool touch_port_init(void) {
 #define CAL_W_X_OFF  (-6.8f)
 #define CAL_W_Y_GAIN 0.957f
 #define CAL_W_Y_OFF  (-13.5f)
+/* The SQUARE (2.16), 2026-10-12: two sittings of 18 presses, the box in a
+ * palm with the THUMB (x = 0.998 t + 8.9, y = 1.011 t + 7.4) and in one hand
+ * with the other's INDEX finger (x = 1.022 t + 3.2, y = 1.015 t + 7.6) - the
+ * two grips within 4 px of each other anywhere on the glass, so ONE map, the
+ * mean of the two fits (docs/touch/2026-10-12_square-*.log). The panel does
+ * not stretch; the finger lands ~8 px right and, counting the bias, ~20 px
+ * low - the same landing the bowl and the 1.8 showed, so CAL_LAND applies
+ * here too and the y offset carries the small rest. The TURNED sitting the
+ * same hour (18 presses, the box upside down) told the two apart: y on the
+ * cross (mean -1.4: the landing turned with the picture, as modelled), but
+ * x 14 px RIGHT after an upright map that took 8.5 off - so upright +8.5
+ * and turned -8 in the raw frame: the panel has NO x offset and the finger
+ * lands ~8 px toward the tapping hand, turning with the picture - the
+ * watch's CAL_W_LAND_X, the same 8. */
+/* ... and then the base turned to USB-DOWN (MADCTL 0xA0, Strato's normal
+ * grip) and the map above, carried over by arithmetic, read 20 px left at
+ * the left column: the panel's two ends are not alike, so the final frame
+ * got its own two sittings (docs/touch/2026-10-12_square-B-thumb.log,
+ * -B-index.log, 18 presses each, over the carried map): the THUMB reaches
+ * the far column 14 px further than the INDEX finger (x 1.065 t - 19 vs
+ * 1.019 t - 7; y 1.018 t - 13 vs 1.006 t - 5). One map, the mean of the two
+ * (x 1.042 t - 13, y 1.012 t - 9), composed onto the carried one: each grip
+ * is ~7 px off at the far-left column and inside a fingertip elsewhere. */
+#define CAL_S_X_GAIN 1.052f
+#define CAL_S_LAND_X 8.0f
+#define CAL_S_X_OFF  13.1f
+#define CAL_S_Y_GAIN 1.025f
+#define CAL_S_Y_OFF  6.8f
 static void cal_point(float rx, float ry, float *tx, float *ty);
 /* an upright raw report -> the finger's point on the picture as shown: calibrated, then turned with the picture */
 static void cal_view(float rx, float ry, float *tx, float *ty) {
@@ -320,12 +366,14 @@ static void cal_view(float rx, float ry, float *tx, float *ty) {
     if (s_inverted) { *tx = TANK_W - 1 - *tx; *ty = TANK_H - 1 - *ty; }
 }
 static void cal_point(float rx, float ry, float *tx, float *ty) {                 /* a raw tank-space report -> where the finger is */
-    float land = (float)s_bias_y + (board_is_round() || board_is_v2() ? CAL_LAND : 0);
+    float land = (float)s_bias_y + (board_is_round() || board_is_v2() || board_is_square() ? CAL_LAND : 0);
     ry -= s_inverted ? -land : land;                  /* the finger's own low landing is the viewer's "down": turned, that is the panel's up */
     if (board_is_watch()) rx -= s_inverted ? -CAL_W_LAND_X : CAL_W_LAND_X;   /* ... and on a wrist it lands toward the tapping hand */
+    if (board_is_square()) rx -= s_inverted ? -CAL_S_LAND_X : CAL_S_LAND_X;  /* ... the square in a hand too */
     if (board_is_round()) ry = (ry + CAL_R_Y_OFF) / CAL_R_Y_GAIN;
     else if (board_is_watch()) { rx = (rx + CAL_W_X_OFF) / CAL_W_X_GAIN; ry = (ry + CAL_W_Y_OFF) / CAL_W_Y_GAIN; }
     else if (board_is_v2()) { rx = (rx + CAL_X_OFF) / CAL_X_GAIN; ry = (ry + CAL_Y_OFF) / CAL_Y_GAIN; }
+    else if (board_is_square()) { rx = (rx + CAL_S_X_OFF) / CAL_S_X_GAIN; ry = (ry + CAL_S_Y_OFF) / CAL_S_Y_GAIN; }
     if (rx < 0) rx = 0;
     if (rx > TANK_W - 1) rx = TANK_W - 1;
     if (ry < 0) ry = 0;
@@ -344,7 +392,7 @@ static void map_touch(uint16_t px, uint16_t py, float *tx, float *ty) {
      * 180-degree turn comes after it (cal_view). Until 2026-10-02 the turn came
      * first, and a turned picture's taps were off by the fit's asymmetry: ~15 px
      * on the watch, ~20 at the top of the bowl, ~2 on the 1.8. */
-#ifdef TANK_WATCH                                     /* the watch's portrait tank: the panel's px are the tank's */
+#if defined(TANK_WATCH) || defined(TANK_SQUARE)       /* the watch's portrait tank, the square's: the panel's px are the tank's */
     int rx = fx, ry = fy;
 #else
     int rx = TANK_W - 1 - fy, ry = fx;

@@ -28,7 +28,7 @@ import zlib
 
 SIM = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "sim"))
 # the board, its simulator, the corner radius of its glass (None = a circle)
-BOARDS = [("1.8", "fishsim", 40), ("1.75C", "fishsim-round", None), ("2.06", "fishsim-watch", 100)]
+BOARDS = [("1.8", "fishsim", 40), ("1.75C", "fishsim-round", None), ("2.06", "fishsim-watch", 100), ("2.16", "fishsim-square", 40)]
 GAP, BACK, OFF = 16, (30, 30, 30), (70, 0, 70)     # between glasses; the sheet; what the bezel hides
 
 

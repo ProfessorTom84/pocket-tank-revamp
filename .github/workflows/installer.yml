@@ -73,6 +73,13 @@ jobs:
           target: esp32s3
           path: firmware
           command: idf.py -B build-watch -DSDKCONFIG=build-watch/sdkconfig "-DSDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.watch" build
+      - name: Build the firmware - the square (2.16)
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.4.1
+          target: esp32s3
+          path: firmware
+          command: idf.py -B build-square -DSDKCONFIG=build-square/sdkconfig "-DSDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.square" build
       # Only the public repo publishes: it tracks model/out/model_q4.bin and
       # owns the Pages site. Anywhere else (the dev repo ignores model/out/*)
       # the job stops here, a compile check of the firmware.
@@ -80,7 +87,7 @@ jobs:
         if: github.repository == 'mediacutlet/pocket-tank'
         run: |
           python3 tools/make_installer.py --build-dir firmware/build \
-            --board-build firmware/build-round --board-build firmware/build-watch --out installer/dist
+            --board-build firmware/build-round --board-build firmware/build-watch --board-build firmware/build-square --out installer/dist
           touch installer/dist/.nojekyll
           ls -la installer/dist installer/dist/firmware
       - uses: actions/upload-pages-artifact@v3

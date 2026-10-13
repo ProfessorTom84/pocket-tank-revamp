@@ -29,6 +29,11 @@
 #define TANK_W 410
 #define TANK_H 502
 #endif
+#ifdef TANK_SQUARE              /* the square (Waveshare 2.16, 2026-10-12): a 480 x 480 glass in a desk box, USB at its foot -
+                                 * the rectangle's world 32 px wider and 112 px taller, the pages centred in it */
+#define TANK_W 480
+#define TANK_H 480
+#endif
 /* a tank WORN on a wrist (2026-10-02): the picture's way up is the keeper's
  * setting (settings SCREEN), never the live IMU's - the arm swings through
  * every angle (tank_screen_*) */
@@ -65,6 +70,12 @@
 #define TANK_BOT  TANK_H
 #define TANK_FX0  44
 #define TANK_FX1  366
+#elif defined(TANK_SQUARE)      /* the square's glass has the 1.8's kind of corner, ~40 px by the maker's pictures (not
+                                 * measured): the sand line (y 464) meets the arcs 8 px in, so the floor keeps 10 px off */
+#define TANK_CORNER_R 40.0f
+#define TANK_BOT  TANK_H
+#define TANK_FX0  10
+#define TANK_FX1  470
 #else
 #define TANK_BOT  TANK_H
 #define TANK_FX0  0
@@ -150,6 +161,11 @@ typedef enum { VEG_KIND_GRASS, VEG_KIND_SWORD } veg_kind_t;
 #define ALGAE_CELL 18
 #define ALGAE_COLS 23
 #define ALGAE_ROWS 28
+#elif defined(TANK_SQUARE)                     /* the square: 24 x 24 cells of 20 px = 576, the 480 px glass exactly (16 px cells
+                                                * would be 900 - the save keeps 644) */
+#define ALGAE_CELL 20
+#define ALGAE_COLS 24
+#define ALGAE_ROWS 24
 #else
 #define ALGAE_CELL 16                          /* px per glass-film grid cell */
 #define ALGAE_COLS (TANK_W / ALGAE_CELL)       /* 28 */
@@ -163,6 +179,8 @@ typedef enum { VEG_KIND_GRASS, VEG_KIND_SWORD } veg_kind_t;
  * 1.8's pitch on every build (VEG_PAY_PX): the same cut, the same sand dollars. */
 #ifdef TANK_WATCH
 #define VEG_SEG_PX 4.3f
+#elif defined(TANK_SQUARE)                     /* ... and the square's 112 px taller: 107 x 4.2 from y 464, the tip at 14 */
+#define VEG_SEG_PX 4.2f
 #else
 #define VEG_SEG_PX 3.2f
 #endif
@@ -832,6 +850,8 @@ void  tank_cluster_place(tank_t *t);
 enum { DECOR_Z_BACK = 0, DECOR_Z_MIDDLE = 1, DECOR_Z_FRONT = 2, DECOR_Z_N = 3 };
 #if defined(TANK_ROUND) || defined(TANK_WATCH)
 #define DECOR_MARGIN    8                  /* the bowl's floor is short and its glass hides nothing (the watch's floor ends where its corners begin) */
+#elif defined(TANK_SQUARE)
+#define DECOR_MARGIN    14                 /* the square's box hides little of its glass: in from the corner arcs */
 #else
 #define DECOR_MARGIN    30                 /* the snail's margin: inside the panel's rounded bezel */
 #endif

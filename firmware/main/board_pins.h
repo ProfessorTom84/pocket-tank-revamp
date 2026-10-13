@@ -23,7 +23,18 @@
  * RTC chip unlike it: no expander + ES7210 + RTC = the watch. DSI_PWR_EN is
  * not a GPIO: it is pulled up to ALDO2, so that rail IS the panel's power
  * switch. PWR key sense on GPIO 10 (SYS_OUT), an SD slot (1/2/3/17) and a
- * vibration motor (GPIO 18, fed from ALDO3) the tank does not use. */
+ * vibration motor (GPIO 18, fed from ALDO3) the tank does not use.
+ *
+ * Waveshare ESP32-S3-Touch-AMOLED-2.16, the SQUARE (2026-10-12; 480x480
+ * CO5300 + CST9220, a desk box with the USB at its foot). Sources:
+ * resources/ESP32-S3-Touch-AMOLED-2.16/ (schematic, wiki page) and Waveshare's
+ * BSP (waveshare/esp32_s3_touch_amoled_2_16: the init sequence, the touch
+ * driver = the 1.75C's CST9217 family). No expander: resets on GPIOs 39 / 40;
+ * the clock on 38 like the 1.75C; an ES7210 and an RTC like the watch - the
+ * same I2C signature, so it is told from the watch by its touch chip
+ * (CST92xx at 0x5A, the watch's FT3168 at 0x38). The panel's 3V3 is VCC3V3
+ * (no rail to cut, as the 1.75C) with DSI_PWR_EN pulled up. Audio pins as the
+ * 1.8's but the master clock on GPIO 42 (16 is SYS_OUT, the PWR key sense). */
 #ifndef BOARD_PINS_H
 #define BOARD_PINS_H
 #define PIN_LCD_CS        12
@@ -68,4 +79,16 @@
 #define W_PANEL_W         410      /* native portrait */
 #define W_PANEL_H         502
 #define W_PANEL_X_GAP     0x16
+
+/* ---- the 2.16 square ---- */
+#define S_PIN_LCD_PCLK    38
+#define S_PIN_LCD_RST     39
+#define S_PIN_TP_RST      40
+#define S_PIN_TP_INT      11       /* unused: polled */
+#define S_PIN_LCD_TE      13       /* unused (the RTC's INT shares the number on the wiki table: TE is on the panel header) */
+#define S_PIN_PWR_SENSE   16       /* SYS_OUT: high while the PWR key is down */
+#define S_PIN_I2S_MCLK    42
+#define S_PIN_KEY3        18       /* the user button (unused) */
+#define S_PANEL           480
+#define S_PANEL_X_GAP     0
 #endif

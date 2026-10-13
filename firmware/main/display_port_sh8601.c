@@ -13,7 +13,13 @@
  * resets and its own init. Its own build (TANK_WATCH) is a PORTRAIT tank,
  * 410x502: the frame is the panel, sent row for row, nothing turned. The
  * rectangle image on a watch takes the 1.8's path - its 448x368 frame turned
- * 90 degrees, centred in the glass (a black border, drawn once). */
+ * 90 degrees, centred in the glass (a black border, drawn once).
+ *
+ * And the SQUARE (the 2.16, 2026-10-12; CO5300, 480x480), GPIO resets like
+ * the 1.75C's, the clock on its pin, the panel on VCC3V3 like its. Its own
+ * build (TANK_SQUARE) is a tank that IS the panel, sent row for row like the
+ * watch's; the rectangle image on it takes the 1.8's path, centred. Which way
+ * is up is the panel's MADCTL (S_MADCTL; director `madctl` to try another). */
 #include "display_port.h"
 #include "board_pins.h"
 #include "tank.h"
@@ -58,6 +64,12 @@ static i2c_master_bus_handle_t s_i2c;
 static bool s_v2;
 static bool s_round;                            /* the 1.75C: no expander, a round 466 px CO5300 */
 static bool s_watch;                            /* the 2.06 watch: no expander, a 410 x 502 CO5300, an RTC chip */
+static bool s_square;                           /* the 2.16 square: the watch's I2C signature, a CST92xx touch chip, a 480 x 480 CO5300 */
+#define S_MADCTL 0xA0                           /* the panel's orientation: the USB at the FOOT, the picture upright - Waveshare's own
+                                                 * "rotation 0" (2026-10-12: an afternoon at 0x60, which is upright USB-UP - the way
+                                                 * Strato first held it; his normal grip is USB-down, and update mode, which never
+                                                 * reads the IMU, showed its crosses upside down there) */
+static uint8_t s_madctl = S_MADCTL;
 static int  s_pw = PANEL_W, s_ph = PANEL_H;     /* the portrait panel this board has */
 static int  s_fx, s_fy;                         /* ... and where the frame's corner sits on it (even, as the CO5300 wants) */
 static bool s_border_clear;                     /* a frame smaller than its panel: the glass around it is owed its black */
@@ -74,16 +86,18 @@ static uint8_t s_fw[4][4][4];                   /* FIT: [row in group][px in gro
 void display_port_set_inverted(bool inverted) { s_inverted = inverted; }
 bool board_is_round(void) { return s_round; }
 bool board_is_watch(void) { return s_watch; }
-int  board_pwr_sense_pin(void) { return s_round ? R_PIN_PWR_SENSE : s_watch ? W_PIN_PWR_SENSE : -1; }
+bool board_is_square(void) { return s_square; }
+int  board_pwr_sense_pin(void) { return s_round ? R_PIN_PWR_SENSE : s_watch ? W_PIN_PWR_SENSE : s_square ? S_PIN_PWR_SENSE : -1; }
 void display_port_frame_origin(int *px, int *py) { *px = s_fx; *py = s_fy; }
 /* the boards whose resets are GPIOs (the 1.75C, the watch): the pads held through a deep sleep */
 typedef struct { gpio_num_t pin; int level; } held_t;
 static const held_t ROUND_HELD[] = { { R_PIN_LCD_RST, 1 }, { R_PIN_TP_RST, 0 }, { PIN_LCD_CS, 1 } };
 static const held_t WATCH_HELD[] = { { W_PIN_LCD_RST, 1 }, { W_PIN_TP_RST, 0 }, { PIN_LCD_CS, 1 } };
+static const held_t SQUARE_HELD[] = { { S_PIN_LCD_RST, 1 }, { S_PIN_TP_RST, 0 }, { PIN_LCD_CS, 1 } };
 #define HELD_N 3
-static const held_t *held_pins(void) { return s_round ? ROUND_HELD : s_watch ? WATCH_HELD : NULL; }
-static gpio_num_t pin_lcd_rst(void) { return s_round ? R_PIN_LCD_RST : s_watch ? W_PIN_LCD_RST : GPIO_NUM_NC; }
-static gpio_num_t pin_tp_rst(void)  { return s_round ? R_PIN_TP_RST : W_PIN_TP_RST; }
+static const held_t *held_pins(void) { return s_round ? ROUND_HELD : s_watch ? WATCH_HELD : s_square ? SQUARE_HELD : NULL; }
+static gpio_num_t pin_lcd_rst(void) { return s_round ? R_PIN_LCD_RST : s_watch ? W_PIN_LCD_RST : s_square ? S_PIN_LCD_RST : GPIO_NUM_NC; }
+static gpio_num_t pin_tp_rst(void)  { return s_round ? R_PIN_TP_RST : s_square ? S_PIN_TP_RST : W_PIN_TP_RST; }
 static void dcs(uint8_t cmd, const uint8_t *param, size_t n);
 void display_port_deep_sleep_pins(bool tp_awake_high) {
     const held_t *h = held_pins();
@@ -100,10 +114,11 @@ void display_port_deep_sleep_pins(bool tp_awake_high) {
  * the panel's power at sleep; here the panel stays powered on VCC3V3, and
  * the deep-sleep hold leaves every un-held pad isolated - the clock and the
  * four data lines float into a powered chip. The night drew ~8 mA with
- * everything else asleep (1.63 %/h of a ~500 mAh cell). Driven low, held. */
+ * everything else asleep (1.63 %/h of a ~500 mAh cell). Driven low, held.
+ * The square's panel sits on VCC3V3 the same way, its clock on the same pin. */
 static const gpio_num_t ROUND_BUS[] = { R_PIN_LCD_PCLK, PIN_LCD_DATA0, PIN_LCD_DATA1, PIN_LCD_DATA2, PIN_LCD_DATA3 };
 void display_port_deep_sleep_bus(void) {
-    if (!s_round) return;
+    if (!s_round && !s_square) return;
     for (size_t i = 0; i < sizeof ROUND_BUS / sizeof ROUND_BUS[0]; i++) {
         gpio_reset_pin(ROUND_BUS[i]);
         gpio_set_direction(ROUND_BUS[i], GPIO_MODE_OUTPUT);
@@ -211,6 +226,35 @@ static const sh8601_lcd_init_cmd_t watch_init_cmds[] = {
     {0x29, (uint8_t[]){0x00}, 0, 10},
     {0x51, (uint8_t[]){0xFF}, 1, 0},
 };
+/* the square's init, from Waveshare's BSP (esp32_s3_touch_amoled_2_16): the
+ * 1.75C's sequence (sleep out first, as the watch), the window the whole 480,
+ * no gap, and the orientation (0x36) before the display comes on */
+static const sh8601_lcd_init_cmd_t square_init_cmds[] = {
+    {0x11, (uint8_t[]){0x00}, 0, 120},
+    {0xFE, (uint8_t[]){0x20}, 1, 0},
+    {0x19, (uint8_t[]){0x10}, 1, 0},
+    {0x1C, (uint8_t[]){0xA0}, 1, 0},
+    {0xFE, (uint8_t[]){0x00}, 1, 0},
+    {0xC4, (uint8_t[]){0x80}, 1, 0},
+    {0x3A, (uint8_t[]){0x55}, 1, 0},
+    {0x35, (uint8_t[]){0x00}, 1, 0},
+    {0x53, (uint8_t[]){0x20}, 1, 0},
+    {0x51, (uint8_t[]){0xFF}, 1, 0},
+    {0x63, (uint8_t[]){0xFF}, 1, 0},
+    {0x2A, (uint8_t[]){0x00, 0x00, 0x01, 0xDF}, 4, 0},
+    {0x2B, (uint8_t[]){0x00, 0x00, 0x01, 0xDF}, 4, 0},
+    {0x36, (uint8_t[]){S_MADCTL}, 1, 0},
+    {0x29, (uint8_t[]){0x00}, 0, 20},
+};
+/* the square's way up, tried live from the director (`madctl <hex>`): the
+ * panel's 0x36, a reset-and-redraw later it is what the next init sends too */
+void display_port_set_madctl(uint8_t v) {
+    s_madctl = v;
+    if (s_io) dcs(0x36, &v, 1);
+    s_border_clear = s_fx > 0 || s_fy > 0;
+}
+uint8_t display_port_madctl(void) { return s_madctl; }
+
 /* The watch's panel power: DSI_PWR_EN is pulled up to the PMIC's ALDO2, and
  * the ES7210 lives whole on ALDO1 (off, it clamps this very bus - the 1.75C's
  * lesson). The PMIC keeps its rail switches across a reset while a cell is
@@ -237,7 +281,7 @@ static void dcs(uint8_t cmd, const uint8_t *param, size_t n) {
     if (s_io) esp_lcd_panel_io_tx_param(s_io, (0x02 << 24) | (cmd << 8), param, n);
 }
 
-static int panel_x_gap(void) { return s_round ? R_PANEL_X_GAP : s_watch ? W_PANEL_X_GAP : s_v2 ? V2_PANEL_X_GAP : 0; }
+static int panel_x_gap(void) { return s_round ? R_PANEL_X_GAP : s_watch ? W_PANEL_X_GAP : s_square ? S_PANEL_X_GAP : s_v2 ? V2_PANEL_X_GAP : 0; }
 static bool probe(uint8_t addr) {                /* three tries: a board is not chosen on one glitch */
     for (int i = 0; i < 3; i++) if (i2c_master_probe(s_i2c, addr, 50) == ESP_OK) return true;
     return false;
@@ -255,6 +299,15 @@ bool display_port_init(void) {
     bool mic = !s_expander && probe(I2C_ADDR_ES7210);
     s_watch = mic && probe(I2C_ADDR_RTC);            /* the watch has the 1.75C's ES7210 AND an RTC chip (on the always-on RTC rail) */
     s_round = mic && !s_watch;
+    if (s_watch) {                                   /* ... and so has the 2.16 square: told apart by the touch chip. Its reset let go
+                                                        (GPIO 40 - the watch's I2S data line, an output anyway: harmless there) and a
+                                                        CST92xx asked for at 0x5A; the watch's FT3168 sits at 0x38 */
+        gpio_reset_pin(S_PIN_TP_RST); gpio_set_direction(S_PIN_TP_RST, GPIO_MODE_OUTPUT);
+        gpio_set_level(S_PIN_TP_RST, 0); vTaskDelay(pdMS_TO_TICKS(10));
+        gpio_set_level(S_PIN_TP_RST, 1); vTaskDelay(pdMS_TO_TICKS(60));
+        s_square = probe(I2C_ADDR_CST9217);
+        if (s_square) s_watch = false;
+    }
     if (!s_expander && !mic && !probe(0x34)) {
         ESP_LOGE(TAG, "nothing answers on the I2C bus (no expander, no ES7210, no PMIC): the board cannot be told, the panel stays dark - "
                       "power the board off and on (unplug USB; with a battery, hold PWR until it cuts, then press it)");
@@ -272,7 +325,18 @@ bool display_port_init(void) {
         return false;
     }
 #endif
-    if (s_watch) {
+#ifdef TANK_SQUARE
+    if (!s_square) {
+        ESP_LOGE(TAG, "this is the SQUARE build (a 480 x 480 tank) and the board is not the 2.16: it has no picture here - flash this board's own image");
+        return false;
+    }
+#endif
+    if (s_square) {
+        ESP_LOGI(TAG, "board: the SQUARE, 2.16 (CO5300 480x480 / CST92xx at 0x%02x) - no expander, an ES7210 at 0x%02x, an RTC at 0x%02x", I2C_ADDR_CST9217, I2C_ADDR_ES7210, I2C_ADDR_RTC);
+        for (size_t i = 0; i < HELD_N; i++) gpio_hold_dis(SQUARE_HELD[i].pin);   /* a deep sleep's holds end here */
+        for (size_t i = 0; i < sizeof ROUND_BUS / sizeof ROUND_BUS[0]; i++) gpio_hold_dis(ROUND_BUS[i]);   /* ... and the QSPI lines' */
+        s_pw = S_PANEL; s_ph = S_PANEL;
+    } else if (s_watch) {
         ESP_LOGI(TAG, "board: the WATCH, 2.06 (CO5300 410x502 / FT3168) - no expander, an ES7210 at 0x%02x, an RTC at 0x%02x", I2C_ADDR_ES7210, I2C_ADDR_RTC);
         for (size_t i = 0; i < HELD_N; i++) gpio_hold_dis(WATCH_HELD[i].pin);   /* a deep sleep's holds end here */
         watch_rails_on();
@@ -293,7 +357,7 @@ bool display_port_init(void) {
         s_v2 = i2c_master_probe(s_i2c, I2C_ADDR_CST816, 50) == ESP_OK;
         ESP_LOGI(TAG, "board revision: %s", s_v2 ? "V2 (CO5300/CST816)" : "V1 (SH8601/FT3168)");
     }
-#ifndef TANK_WATCH                                    /* (the watch's own build: the frame is the panel, origin 0, 0) */
+#if !defined(TANK_WATCH) && !defined(TANK_SQUARE)     /* (the watch's and the square's own builds: the frame is the panel, origin 0, 0) */
     if (!s_round) {                                   /* a portrait panel: the turned frame centred on it (the whole of it, on the 1.8) */
         s_fx = ((s_pw - FRAME_PW) / 2) & ~1; s_fy = ((s_ph - FRAME_PH) / 2) & ~1;
         s_border_clear = s_fx > 0 || s_fy > 0;
@@ -305,7 +369,7 @@ bool display_port_init(void) {
         if (!s_stripe[i]) return false;
     }
     s_stripe_free = xSemaphoreCreateCounting(2, 2);
-    const spi_bus_config_t spi = SH8601_PANEL_BUS_QSPI_CONFIG(s_round ? R_PIN_LCD_PCLK : PIN_LCD_PCLK, PIN_LCD_DATA0, PIN_LCD_DATA1,
+    const spi_bus_config_t spi = SH8601_PANEL_BUS_QSPI_CONFIG(s_round ? R_PIN_LCD_PCLK : s_square ? S_PIN_LCD_PCLK : PIN_LCD_PCLK, PIN_LCD_DATA0, PIN_LCD_DATA1,
                                                               PIN_LCD_DATA2, PIN_LCD_DATA3, STRIPE_BYTES);
     ESP_ERROR_CHECK(spi_bus_initialize(LCD_HOST, &spi, SPI_DMA_CH_AUTO));
     esp_lcd_panel_io_handle_t io;
@@ -313,9 +377,10 @@ bool display_port_init(void) {
     io_cfg.pclk_hz = 80 * 1000 * 1000;
     ESP_ERROR_CHECK(esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)LCD_HOST, &io_cfg, &io));
     s_io = io;
-    const sh8601_vendor_config_t vendor = { .init_cmds = s_round ? round_init_cmds : s_watch ? watch_init_cmds : init_cmds,
+    const sh8601_vendor_config_t vendor = { .init_cmds = s_round ? round_init_cmds : s_watch ? watch_init_cmds : s_square ? square_init_cmds : init_cmds,
                                             .init_cmds_size = s_round ? sizeof round_init_cmds / sizeof round_init_cmds[0]
-                                                            : s_watch ? sizeof watch_init_cmds / sizeof watch_init_cmds[0] : sizeof init_cmds / sizeof init_cmds[0],
+                                                            : s_watch ? sizeof watch_init_cmds / sizeof watch_init_cmds[0]
+                                                            : s_square ? sizeof square_init_cmds / sizeof square_init_cmds[0] : sizeof init_cmds / sizeof init_cmds[0],
                                             .flags.use_qspi_interface = 1 };
     const esp_lcd_panel_dev_config_t pcfg = { .reset_gpio_num = pin_lcd_rst(), .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB,
                                               .bits_per_pixel = 16, .vendor_config = (void *)&vendor };
@@ -333,6 +398,8 @@ bool display_port_init(void) {
 #endif
 #ifdef TANK_WATCH
     else ESP_LOGI(TAG, "panel up: %dx%d portrait, the portrait tank px for px", s_pw, s_ph);
+#elif defined(TANK_SQUARE)
+    else ESP_LOGI(TAG, "panel up: %dx%d square, the tank px for px (MADCTL %02x)", s_pw, s_ph, s_madctl);
 #else
     else if (s_fx || s_fy) ESP_LOGI(TAG, "panel up: %dx%d portrait, the %dx%d tank frame rotated 90 deg and centred (%d, %d)", s_pw, s_ph, TANK_W, TANK_H, s_fx, s_fy);
     else ESP_LOGI(TAG, "panel up: %dx%d portrait, tank frame rotated 90 deg", s_pw, s_ph);
@@ -366,6 +433,7 @@ void display_port_wake(void) {
     esp_lcd_panel_reset(s_panel);
     esp_lcd_panel_init(s_panel);
     esp_lcd_panel_set_gap(s_panel, panel_x_gap(), 0);
+    if (s_square && s_madctl != S_MADCTL) dcs(0x36, &s_madctl, 1);   /* a way up tried from the director outlives the re-init */
     display_port_set_brightness(s_brightness);      /* init_cmds put it back at 255 */
     esp_lcd_panel_disp_on_off(s_panel, true);
     s_round_clear = true;                           /* a reset panel's memory is not black */
@@ -501,10 +569,10 @@ static void round_flush(const uint16_t *fb) {
  * overlaps the DMA of stripe N. The frame is FRAME_PW x FRAME_PH on the panel,
  * FRAME_ROWS of it a stripe (the last may be short), at (s_fx, s_fy): the
  * whole panel on the 1.8 and on the watch's own build. */
-#ifdef TANK_WATCH
+#if defined(TANK_WATCH) || defined(TANK_SQUARE)
 /* The watch's own build: the frame is the panel's 410 x 502, row for row -
- * no turn. As many whole rows as fit a stripe buffer (28); flipped, the same
- * picture turned 180 degrees. */
+ * no turn. As many whole rows as fit a stripe buffer (28; 24 of the square's
+ * 480); flipped, the same picture turned 180 degrees. */
 static void native_flush(const uint16_t *fb) {
     int cur = 0;
     const int rows = (STRIPE_BYTES / (TANK_W * 2)) & ~1;
@@ -530,7 +598,7 @@ static void native_flush(const uint16_t *fb) {
 void display_port_flush(const uint16_t *fb) {
     if (!s_panel) return;
     if (s_round) { round_flush(fb); return; }
-#ifdef TANK_WATCH
+#if defined(TANK_WATCH) || defined(TANK_SQUARE)
     native_flush(fb); return;
 #else
     int cur = 0;

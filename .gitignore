@@ -36,3 +36,5 @@ sim/sheets/
 
 # this bench's boards (USB serials) for flash_round.sh / flash_watch.sh
 tools/boards.local.sh
+sim/build-square/
+sim/fishsim-square

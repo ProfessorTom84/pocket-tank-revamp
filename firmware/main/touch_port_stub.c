@@ -39,4 +39,6 @@ void touch_port_set_log(bool on) { (void)on; }
 void touch_port_set_lift(int ms, int said) { (void)ms; (void)said; }
 int  touch_port_lift_ms(void) { return 0; }
 bool touch_port_lift_said(void) { return false; }
+void touch_port_set_mirror(int m) { (void)m; }
+int  touch_port_mirror(void) { return 0; }
 void touch_port_raw_seen(int *x0, int *x1, int *y0, int *y1) { *x0 = *y0 = 0; *x1 = *y1 = -1; }

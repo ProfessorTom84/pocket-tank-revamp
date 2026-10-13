@@ -22,6 +22,9 @@ void display_port_deep_standby(void) { }
 void display_port_deep_sleep_bus(void) { }
 bool board_has_expander(void) { return true; }
 bool board_is_watch(void) { return false; }
+bool board_is_square(void) { return false; }
+void display_port_set_madctl(uint8_t v) { (void)v; }
+uint8_t display_port_madctl(void) { return 0; }
 int  board_pwr_sense_pin(void) { return -1; }
 void display_port_frame_origin(int *px, int *py) { *px = 0; *py = 0; }
 void display_port_set_view(int view) { (void)view; }

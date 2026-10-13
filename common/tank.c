@@ -520,6 +520,11 @@ static void veg_bed_base(const tank_t *t, int b, float *bx0, int *n) {
                                                               five fronds beside it, the reef bed four fronds fewer - open sand between */
     else if (b == 1) { *bx0 = TANK_FX1 - 72; base_n = 4; }
     else if (b == 2) { *bx0 = TANK_FX1 - 146; base_n = -1; }
+#elif defined(TANK_SQUARE)                                 /* the square's floor is 460 px, 12 more than the rectangle's: the two right-hand
+                                                              beds keep their place against the right glass (the rectangle's 0.84 x 480
+                                                              left bed 1 a frond short of the wall) */
+    else if (b == 1) { *bx0 = TANK_FX1 - 72; base_n = 4; }
+    else if (b == 2) { *bx0 = TANK_FX1 - 170; base_n = 2; }
 #else
     else if (b == 1) { *bx0 = TANK_W * 0.84f; base_n = 4; }
     else if (b == 2) { *bx0 = TANK_W * 0.62f; base_n = 2; }
@@ -620,13 +625,13 @@ static float veg_slot_rand(int b, int i, uint32_t salt) {
  * profile, so a tall start does not mean a tall ceiling) */
 float tank_veg_cap(int b, int i) {
     float cap = VEG_CAP_LO + veg_slot_rand(b, i, 0x5EA62A55u) * (VEG_CAP_HI - VEG_CAP_LO);
-#if defined(TANK_ROUND) || defined(TANK_WATCH)             /* the bowl closes in over the outer fronds: a tip stops 12 px under the glass
+#if defined(TANK_ROUND) || defined(TANK_CORNER_R)          /* the bowl closes in over the outer fronds: a tip stops 12 px under the glass
                                                               (the reef bed taken at its widest, the sword plant wherever it stands);
-                                                              the watch's upper corners do the same to the beds by its walls */
+                                                              the watch's and the square's upper corners do the same to the beds by its walls */
     if (b < 3) {
 #ifdef TANK_WATCH
         float x = (b == 0 ? TANK_FX0 + TANK_FW * 0.15f - 48 : b == 1 ? TANK_FX1 - 72 : TANK_FX1 - 146) + i * 12;
-#else
+#else                                                      /* (the bowl's and the square's bed spots) */
         float x = (b == 0 ? TANK_FX0 + TANK_FW * 0.15f - 48 : b == 1 ? TANK_FX1 - 72 : TANK_FX1 - 170) + i * 12;
 #endif
         float room = (TANK_BOT - 16 - tank_glass_top(x) - VEG_GLASS_GAP) / (VEG_SEGS_FULL * VEG_SEG_PX);

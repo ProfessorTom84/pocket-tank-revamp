@@ -62,5 +62,7 @@ void touch_port_set_log(bool on);              /* one log line per press, at its
 void touch_port_set_lift(int ms, int said);
 int  touch_port_lift_ms(void);
 bool touch_port_lift_said(void);
+void touch_port_set_mirror(int m);               /* the CST92xx boards: bit 0 x mirrored, bit 1 y mirrored, bit 2 axes swapped (the bench) */
+int  touch_port_mirror(void);
 void touch_port_raw_seen(int *x0, int *x1, int *y0, int *y1);   /* the raw report's extremes since boot, in tank space (x1 < x0: no touch yet) */
 #endif

@@ -24,6 +24,10 @@ void battery_port_key_trace(int seconds);   /* bench: log each press's length fo
  * and state of charge, decoded to the log (read-only). VBAT in mV, 0 = n/a. */
 void battery_port_dump(void);
 int  battery_port_vbat_mv(void);
+/* the charger (director `charge [mA]`): the set current, a live change (not saved: the boot sets the board's own again), a report */
+int  battery_port_charge_ma(void);
+bool battery_port_set_charge_ma(int ma);
+void battery_port_charge_report(void);
 /* rails (2026-09-11, from the board schematic): DCDC1 is VCC3V3 - the ESP32,
  * flash, PSRAM, panel (VCI + VDDIO), touch, expander, IMU, SD, the codec's
  * digital side and the speaker amp - and RTCLDO feeds the RTC; both are

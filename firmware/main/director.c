@@ -196,7 +196,7 @@ static void help(void) {
     ESP_LOGI(TAG, "battery <pct> [charging|full|plugged]|real (a STAGED gauge: on battery at pct - the card's pill, and at 10 or less the low-battery notice + cue + the pill that stays - or on the cable: the bolt, the sweep while charging, the pill for a few seconds; not saved) | battery page [off] (the battery page, as a tap on the pill opens it) | battery (its numbers) | snd battery (just the notice + cue)");
     ESP_LOGI(TAG, "kbd [wheel|grid|pages] (the name page's design: the wheel, or one of the two rejected keyboards of 09-13 - not saved, a boot is the wheel)");
     ESP_LOGI(TAG, "touch [bias <px>] [log on|off] [lift <ms>] [said on|off] (finger-landing correction: reported touches move up by px; not saved; also the raw span seen since boot)");
-    ESP_LOGI(TAG, "pmic (AXP2101 dump) | pmic on|off <aldo1|aldo2..4|bldo1|bldo2|cpusldo|dcdc2..5|dldo1|dldo2> (experiments; boot trims the unused ones) | pmic trim");
+    ESP_LOGI(TAG, "charge [mA] (the charger live: state, VBUS, die temperature; a current tried until the next boot) | pmic (AXP2101 dump) | pmic on|off <aldo1|aldo2..4|bldo1|bldo2|cpusldo|dcdc2..5|dldo1|dldo2> (experiments; boot trims the unused ones) | pmic trim");
     ESP_LOGI(TAG, "bright <0-255> (panel now; not saved) | level 100|60|30 (the keeper's setting, saved)");
     ESP_LOGI(TAG, "batlog [clear] (the tank's own battery log: SoC/VBAT every 5 min awake, 30 min asleep, mA derived - read it after a night on battery) | codec (ES8311 registers) | clock (the clock: RTC chip or the internet's time, and whether tonight is a power-off) | sleepcfg [mask] (the round board's deep-sleep savings: 1 touch, 2 panel, 4 IMU, 8 QSPI held; 15 = all, the default) | deepsleep [N] (N: 5 s grace then deep sleep with an N s timer wake - one batlog window per N, BOOT wakes it; no N: the keeper's sleep, grace then power-off) | poweroff (save + PMIC cut now) | keytime [N] (N s of timing every PWR press - is a tap under the PMIC's 128 ms power-on hold?)");
     ESP_LOGI(TAG, "overgrown (grass to the ceiling + fouled glass; fish stress climbs) | court (stage the fry: in ~10-20 s the pair courts in the grass, then it is born) | arrive (the fry, now)");
@@ -400,6 +400,9 @@ static void run(tank_t *t, char *line) {
         tank_decor_set(t, item, (float)atof(argv[a]), z); progression_save(t); z = tank_decor_z(t, item);
         ESP_LOGI(TAG, "%s at x %.0f, %s, saved", what, tank_decor_x(t, item),
                  item == 2 ? (z == DECOR_Z_BACK ? "BEHIND the grass" : "IN FRONT of the grass") : z == DECOR_Z_BACK ? "BEHIND the fish" : z == DECOR_Z_FRONT ? "IN FRONT of the fish" : "AMONG the fish");
+    } else if (!strcmp(c, "charge")) {               /* charge [mA]: the charger live - a current tried (not saved), what the chip and the source say */
+        if (argc > 1) ESP_LOGI(TAG, "charge current %s mA: %s", argv[1], battery_port_set_charge_ma(atoi(argv[1])) ? "set (until the next boot)" : "REFUSED");
+        battery_port_charge_report();
     } else if (!strcmp(c, "pmic")) {
         if (argc > 2 && (!strcmp(argv[1], "on") || !strcmp(argv[1], "off")))
             ESP_LOGI(TAG, "rail %s %s: %s", argv[2], argv[1], battery_port_set_rail(argv[2], !strcmp(argv[1], "on")) ? "ok" : "REFUSED");
@@ -503,13 +506,18 @@ static void run(tank_t *t, char *line) {
         if (!board_is_round()) { ESP_LOGI(TAG, "view: not the round board"); return; }
         if (argc > 1) display_port_set_view(!strcmp(argv[1], "full") ? DISPLAY_VIEW_FULL : DISPLAY_VIEW_FIT);
         ESP_LOGI(TAG, "view: %s", display_port_view() == DISPLAY_VIEW_FULL ? "FULL (px for px, the circle crops the corners)" : "FIT (4/5, the whole frame inside the circle)");
+    } else if (!strcmp(c, "madctl")) {               /* the square: madctl <hex> - the panel's orientation register, tried live (00 60 A0 C0 ...) */
+        if (!board_is_square()) { ESP_LOGI(TAG, "madctl: not the square"); return; }
+        if (argc > 1) display_port_set_madctl((uint8_t)strtol(argv[1], NULL, 16));
+        ESP_LOGI(TAG, "madctl: 0x%02x", display_port_madctl());
     } else if (!strcmp(c, "touch")) {
         if (argc > 2 && !strcmp(argv[1], "bias")) touch_port_set_bias(atoi(argv[2]));
+        if (argc > 2 && !strcmp(argv[1], "mirror")) touch_port_set_mirror(atoi(argv[2]));   /* the CST92xx boards: bit 0 x, bit 1 y, bit 2 swap */
         if (argc > 2 && !strcmp(argv[1], "log")) { touch_port_set_log(!strcmp(argv[2], "on")); ESP_LOGI(TAG, "touch log %s (a line per press, at its release)", argv[2]); }
         if (argc > 2 && !strcmp(argv[1], "lift")) touch_port_set_lift(atoi(argv[2]), -1);
         if (argc > 2 && !strcmp(argv[1], "said")) touch_port_set_lift(0, !strcmp(argv[2], "on"));
         ESP_LOGI(TAG, "touch bias %d px (reported y - %d)", touch_port_bias(), touch_port_bias());
-        if (board_is_round()) ESP_LOGI(TAG, "touch lift: %d ms of silence, a \"no finger\" report lifts at once: %s", touch_port_lift_ms(), touch_port_lift_said() ? "on" : "off");
+        if (board_is_round() || board_is_square()) ESP_LOGI(TAG, "touch lift: %d ms of silence, a \"no finger\" report lifts at once: %s; mirror %d (bit 0 x, bit 1 y, bit 2 swap)", touch_port_lift_ms(), touch_port_lift_said() ? "on" : "off", touch_port_mirror());
         int x0, x1, y0, y1; touch_port_raw_seen(&x0, &x1, &y0, &y1);
         if (x1 >= x0) ESP_LOGI(TAG, "touch raw seen since boot: x %d..%d of 0..%d, y %d..%d of 0..%d (scrub the four walls first: the stroke's reach assumes the full span)", x0, x1, TANK_W - 1, y0, y1, TANK_H - 1);
     } else if (!strcmp(c, "name") && argc > 2) {

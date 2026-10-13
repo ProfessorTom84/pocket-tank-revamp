@@ -103,5 +103,5 @@ void batlog_print(void) {
     }
     if (awake_h > 0) ESP_LOGI("batlog", "  awake:  %.1f h, %.0f mAh -> %.0f mA average", awake_h, awake_mah, awake_mah / awake_h);
     if (sleep_h > 0) ESP_LOGI("batlog", "  asleep: %.1f h, %.1f mAh -> %.2f mA average", sleep_h, sleep_mah, sleep_mah / sleep_h);
-    ESP_LOGI("batlog", "  (SoC is 1%% = 2 mAh; short awake windows are coarse, a night is not)");
+    ESP_LOGI("batlog", "  (SoC is 1%% = %d mAh; short awake windows are coarse, a night is not)", BATLOG_CELL_MAH / 100);
 }

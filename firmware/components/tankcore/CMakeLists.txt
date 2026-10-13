@@ -22,3 +22,6 @@ endif()
 if(CONFIG_POCKET_TANK_WATCH)   # the watch's 410 x 502 portrait tank
     target_compile_definitions(${COMPONENT_LIB} PUBLIC TANK_WATCH)
 endif()
+if(CONFIG_POCKET_TANK_SQUARE)  # the square's 480 x 480 tank
+    target_compile_definitions(${COMPONENT_LIB} PUBLIC TANK_SQUARE)
+endif()

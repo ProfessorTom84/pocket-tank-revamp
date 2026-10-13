@@ -682,7 +682,14 @@ static void tank_task(void *arg) {
             }
             int64_t t0 = esp_timer_get_time();
             wait_us += t0 - pf_wait;
-            render_tank(&tank, fb[cur], TANK_W);
+            /* a page that covers the glass (KEEPER, SETTINGS, UPDATES, UPGRADES: each fills the whole frame before
+               it draws): the tank under it is not rendered - it was every frame, hidden (2026-10-13, on a watch:
+               19 fps with SETTINGS up, 25 without the hidden tank). The tank itself ticks on. No buffer holds
+               the scene while a page is up, so none is "primed": the first tank frame after the page copies the
+               scene itself. */
+            bool page = touch_port_milestones() || touch_port_settings() || touch_port_updates() || touch_port_shop();
+            if (page) render_fb_primed(NULL, 0);
+            else render_tank(&tank, fb[cur], TANK_W);
             touch_port_poll(&tank);          /* the CST816 is polled, not interrupt-
                                                 driven: extra samples inside the frame
                                                 keep quick finger taps from slipping
@@ -732,7 +739,7 @@ static void tank_task(void *arg) {
                only reads this frame's buffer; the copy rides alongside it. */
             { uint16_t *next = fb[cur ^ 1];
               const uint16_t *scene = render_scene_buf(&s_prefetch_ep);
-              if (s_amc && scene && next && next != fb[cur] &&
+              if (!page && s_amc && scene && next && next != fb[cur] &&      /* (under a page the scene would only be painted over) */
                   esp_async_memcpy(s_amc, next, (void *)scene, PLAN_FB_ALLOC, amc_cb, NULL) == ESP_OK) {
                   s_prefetch_fb = next; s_prefetch_pending = true;
               } }
