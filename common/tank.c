@@ -205,6 +205,7 @@ static uint32_t fin_for(uint32_t body) {
     uint32_t r = (body >> 16 & 255) * 58 / 100, g = (body >> 8 & 255) * 58 / 100, b = (body & 255) * 58 / 100;
     return (r << 16) | (g << 8) | b;
 }
+uint32_t tank_fin_for(uint32_t body) { return fin_for(body); }
 void tank_set_look(tank_t *t, int slot, uint32_t body, uint32_t accent) {
     if (slot < 0 || slot >= N_FISH_MAX) return;
     fish_t *f = &t->fish[slot];
@@ -309,6 +310,29 @@ int tank_add_fish(tank_t *t, int parent_a, int parent_b) {
     return slot;
 }
 
+/* a fry from the shop (0.3.5): no parents - a free roster slot, the look it
+ * was offered in, a temperament of its own (nobody's to inherit), and in at
+ * the surface under the middle of the glass, as if poured from the bag */
+int tank_add_bought_fry(tank_t *t, uint32_t body, uint32_t accent) {
+    if (t->n_fish >= N_FISH_MAX || t->n_fish >= ROSTER_N) return -1;
+    int used[ROSTER_N] = {0};
+    for (int i = 0; i < t->n_fish; i++) used[t->fish[i].preset] = 1;
+    int free_n = 0, free_idx[ROSTER_N];
+    for (int i = 0; i < ROSTER_N; i++) if (!used[i]) free_idx[free_n++] = i;
+    if (!free_n) return -1;
+    int preset = free_idx[(int)tank_randf(t, 0, free_n - 0.001f)];
+    int slot = t->n_fish;
+    tank_make_fish(t, slot, preset, tank_randf(t, 0.25f, 0.75f), tank_randf(t, 0.25f, 0.75f), STAGE_FRY);
+    tank_set_look(t, slot, body, accent);
+    fish_t *f = &t->fish[slot];
+    f->parent_a = f->parent_b = -1;
+    f->x = TANK_W * 0.5f + tank_randf(t, -30, 30); f->y = tank_glass_top(f->x) + 30;
+    f->heading = tank_randf(t, 1.2f, 1.9f); tank_fish_face(f);   /* heading down into the water */
+    f->hunger = 4; f->trust = 4;
+    t->n_fish++;
+    return slot;
+}
+
 bool tank_remove_fish(tank_t *t, int idx) {
     if (idx < 0 || idx >= t->n_fish) return false;
     for (int i = idx; i < t->n_fish - 1; i++) {
@@ -372,7 +396,7 @@ void tank_init(tank_t *t, uint32_t seed) {
     veg_sync(t);
     t->slash_armed = t->slash_engaged = t->slash_cut = false;
     t->slash_h = t->slash_v = 0;
-    t->tool = TOOL_HAND; t->tool_idle = 0;
+    t->tool = TOOL_HAND; t->tool_idle = 0; t->tools_locked = false;
     for (int i = 0; i < ALGAE_CELLS; i++) t->algae[i] = 0;
     t->algae_acc = 0; t->trims = 0; t->cells_cleaned = 0;
     t->algae_colonies = 0; t->trim_px = 0;
@@ -1421,14 +1445,15 @@ void tank_touch_drag(tank_t *t, float x, float y) {
             if (!veg_near_frond(t, b, x, y, SLASH_START_SIDE_PX, SLASH_START_PX))
                 t->slash_wall = (int8_t)veg_wall_frond(t, b, x, y, SLASH_START_PX);
         if (t->slash_wall) t->slash_armed = true;
-        if (t->tool == TOOL_SPONGE) { t->slash_armed = false; t->slash_wall = 0; }   /* the sponge never cuts */
+        if (t->tool == TOOL_SPONGE || (t->tool == TOOL_HAND && t->tools_locked)) { t->slash_armed = false; t->slash_wall = 0; }   /* the sponge never cuts, nor does a locked bare finger */
         t->slash_engaged = t->slash_cut = false; t->wipe_sounded = false;
         t->slash_x0 = x; t->slash_y0 = y; t->slash_h = t->slash_v = 0;
     }
     if (t->drag_has_prev) {
         float sdx = x - t->drag_px, sdy = y - t->drag_py;
         t->drag_dist += tank_dist(x, y, t->drag_px, t->drag_py);
-        if (t->tool != TOOL_SCISSORS && t->drag_dist >= WIPE_ENGAGE_PX) {   /* a real stroke, not a tap; the scissors never wipe */
+        bool wipes = t->tool == TOOL_SPONGE || (t->tool == TOOL_HAND && !t->tools_locked);   /* the scissors never wipe, nor does a locked bare finger */
+        if (wipes && t->drag_dist >= WIPE_ENGAGE_PX) {   /* a real stroke, not a tap */
             wipe_algae(t, t->drag_px, t->drag_py, x, y);
             if (!t->wipe_sounded) { t->wipe_sounded = true; tank_emit(TEV_WIPE, -1); }
         }
@@ -1463,6 +1488,9 @@ void tank_set_tool(tank_t *t, int tool) {
     t->tool = (uint8_t)(tool == TOOL_SPONGE || tool == TOOL_SCISSORS ? tool : TOOL_HAND);
     t->tool_idle = 0;
 }
+
+void tank_lock_tools(tank_t *t, bool lock) { t->tools_locked = lock; }
+bool tank_stroking(const tank_t *t) { return t->drag_has_prev && t->drag_dist >= WIPE_ENGAGE_PX; }
 
 void tank_feed(tank_t *t, float x, int n) {
     tank_handled(t);

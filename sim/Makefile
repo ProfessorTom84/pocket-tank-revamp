@@ -48,7 +48,7 @@ $(OUT): $(OBJS)
 	$(CC) -o $@ $(OBJS) $(LDFLAGS)
 
 SELFTESTS := --selftest --selftest-hunger --selftest-shop --selftest-battery \
-             --selftest-pop --selftest-card --selftest-sleep --selftest-tend --selftest-llm \
+             --selftest-pop --selftest-card --selftest-fry --selftest-sleep --selftest-tend --selftest-llm \
              --selftest-saves --selftest-update
 # the dev repo does not track model/out (the public one does): NOMODEL=1 runs
 # the same checks without the LLM selftest, for a checkout with no model

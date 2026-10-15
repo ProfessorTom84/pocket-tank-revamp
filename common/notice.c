@@ -32,7 +32,12 @@ void notice_sync(const tank_t *t) {
 
 void notice_tick(const tank_t *t, float dt, bool blocked) {
     if (s_n_fish < 0) { notice_sync(t); return; }
-    if (t->n_fish < s_n_fish) { notice_sync(t); return; }   /* a reset: nothing to say */
+    if (t->n_fish < s_n_fish) {
+        if ((t->tank_ms_bits & s_tms) != s_tms) { notice_sync(t); return; }   /* a reset: nothing to say */
+        for (int i = 0; i < N_FISH_MAX; i++) { s_ms[i] = t->fish[i].ms_bits; s_stage[i] = t->fish[i].stage; }
+        /* a sale (0.3.5): the fish after it moved down a slot - adopt them as
+           they are; the tank's badges (the first sale's) still speak */
+    }
     for (int i = s_n_fish; i < t->n_fish; i++) {            /* an arrival: adopt the fry quietly */
         s_ms[i] = t->fish[i].ms_bits; s_stage[i] = t->fish[i].stage;
     }

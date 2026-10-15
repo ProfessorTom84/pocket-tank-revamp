@@ -749,9 +749,11 @@ void render_setup(const tank_t *t, uint16_t *fb, int stride, float clock) {
         render_rect_blend(fb, stride, -PAGE_X, 92, TANK_W, 116, C_PANEL, 150);
         text_c(fb, stride, CX, 104, 3, C_TEXT, "A NEW FRY!");
         char l1[FISH_NAME_MAX * 2 + 24];
-        snprintf(l1, sizeof l1, "BORN TO %s AND %s", fish_name(t, f->parent_a), fish_name(t, f->parent_b));
+        bool shop = f->parent_a < 0 && f->parent_b < 0;              /* bought (0.3.5): no parents, in at the surface */
+        if (shop) snprintf(l1, sizeof l1, "FROM THE SHOP,");
+        else snprintf(l1, sizeof l1, "BORN TO %s AND %s", fish_name(t, f->parent_a), fish_name(t, f->parent_b));
         text_c(fb, stride, CX, 140, 2, C_CAPT, l1);
-        text_c(fb, stride, CX, 162, 2, C_CAPT, "DOWN IN THE GRASS.");
+        text_c(fb, stride, CX, 162, 2, C_CAPT, shop ? "IN AT THE SURFACE." : "DOWN IN THE GRASS.");
         text_c(fb, stride, CX, 184, 2, C_CAPT, "GO AND SAY HELLO.");
         render_button(fb, stride, SETUP_MID_X, SETUP_BTN_Y, SETUP_BTN_W, SETUP_BTN_H, C_GO, C_GO_E, "MEET IT", 2);
         dots(fb, stride, PAGE_H - 14);
@@ -763,8 +765,9 @@ void render_setup(const tank_t *t, uint16_t *fb, int stride, float clock) {
         const fish_t *f = &t->fish[page_fish()];
         const fish_t *pa = f->parent_a >= 0 && f->parent_a < t->n_fish ? &t->fish[f->parent_a] : NULL;
         const fish_t *pb = f->parent_b >= 0 && f->parent_b < t->n_fish ? &t->fish[f->parent_b] : NULL;
-        const char *na = fish_name(t, f->parent_a), *nb = fish_name(t, f->parent_b);
-        uint32_t ca = pa ? pa->color : C_DIM, cb = pb ? pb->color : C_DIM;
+        bool shop = f->parent_a < 0 && f->parent_b < 0;              /* bought (0.3.5): its look is the shop's */
+        const char *na = shop ? "THE SHOP" : fish_name(t, f->parent_a), *nb = shop ? "THE SHOP" : fish_name(t, f->parent_b);
+        uint32_t ca = pa ? pa->color : shop ? C_CAPT : C_DIM, cb = pb ? pb->color : shop ? C_CAPT : C_DIM;
         panel(fb, stride);
         text_c(fb, stride, CX, SETUP_Y + 20, 3, C_TEXT, f->name);
         float ps = f->size * 2.0f;                                   /* a portrait, twice life size (a fry) ... */
@@ -797,8 +800,11 @@ void render_setup(const tank_t *t, uint16_t *fb, int stride, float clock) {
         }
         y += SETUP_FAM_ROW_DY;
         render_text(fb, stride, SETUP_FAM_LABEL_X, y, 2, C_CAPT, "PARENTS");
-        render_text(fb, stride, vx, y, 2, ca, na);
-        render_text(fb, stride, vx + render_text_w(na, 2) + 16, y, 2, cb, nb);
+        if (shop) render_text(fb, stride, vx, y, 2, C_CAPT, "NONE HERE");
+        else {
+            render_text(fb, stride, vx, y, 2, ca, na);
+            render_text(fb, stride, vx + render_text_w(na, 2) + 16, y, 2, cb, nb);
+        }
         nav(fb, stride, false, "DONE", true);
         dots(fb, stride, SETUP_Y + SETUP_H - 8);
     } else {                                                        /* SETUP_PG_CARE */

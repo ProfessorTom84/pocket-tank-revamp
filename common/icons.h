@@ -29,6 +29,7 @@ extern const icon_t icon_ms_first_meal;
 extern const icon_t icon_ms_first_play_session;
 extern const icon_t icon_ms_first_quiet_night;
 extern const icon_t icon_ms_first_reef;
+extern const icon_t icon_ms_first_sale;
 extern const icon_t icon_ms_first_seagrass;
 extern const icon_t icon_ms_first_trimming;
 extern const icon_t icon_ms_full_school;
@@ -45,6 +46,8 @@ extern const icon_t icon_shop_snail;
 extern const icon_t icon_shop_urchin;
 extern const icon_t icon_snail_glass;
 extern const icon_t icon_snail_upright;
+extern const icon_t icon_tool_lock_closed;
+extern const icon_t icon_tool_lock_open;
 extern const icon_t icon_tool_scissors;
 extern const icon_t icon_tool_sponge;
 

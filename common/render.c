@@ -2494,6 +2494,16 @@ static void tools_draw(ctx_t *c, const tank_t *t) {
         const icon_t *ic = ICON[k];
         blit_icon_scaled(c, bx + (TOOL_BTN_W - ic->w * 2) / 2, by + (TOOL_BTN_H - ic->h * 2) / 2, ic, 2, true);
     }
+    /* the LOCK beside it (0.3.5) */
+    const int LX = RENDER_LOCK_X, LY = RENDER_LOCK_Y, LW = RENDER_LOCK_W, LH = RENDER_LOCK_H;
+    if (t->tools_locked) rect_fill(c, LX, LY, LW, LH, 0x356670); else shade_box(c, LX, LY, LW, LH);
+    rect_edge(c, LX, LY, LW, LH, t->tools_locked ? 0xffffff : 0x9fd8e2);
+    rect_edge(c, LX + 1, LY + 1, LW - 2, LH - 2, t->tools_locked ? 0xffffff : 0x1c2f36);
+    const icon_t *lk = t->tools_locked ? &icon_tool_lock_closed : &icon_tool_lock_open;
+    blit_icon(c, LX + (LW - lk->w) / 2, LY + (LH - lk->h) / 2, lk, 255);
+}
+bool render_lock_hit(float x, float y) {
+    return y >= RENDER_TOOLS_Y && x >= RENDER_LOCK_X && x < RENDER_LOCK_X + RENDER_LOCK_W + 16;
 }
 int render_tools_hit(float x, float y) {
     const int X = RENDER_TOOLS_X, W = RENDER_TOOLS_W;
@@ -2513,6 +2523,10 @@ int render_tools_hit(float x, float y) {
 static int tool_chip_w(void) { return 8 + 24 + 8 + text_w("DONE", 2) + 10; }
 void render_tool_chip(const tank_t *t, int fish_idx, uint16_t *fb, int stride) {
     if (t->tool == TOOL_HAND || (fish_idx >= 0 && fish_idx < t->n_fish)) return;
+    /* a stroke on the glass: the chip steps aside until the finger lifts, so
+     * the film it covers shows as the sponge takes it (0.3.5, Strato: "the
+     * sponge should be able to clean algae behind the DONE button") */
+    if (tank_stroking(t)) return;                    /* (not a press: the tap on DONE itself keeps it in view) */
     ctx_t c = ctx_full(fb, stride, 1.0f);
     const int X = TOOL_CHIP_X, Y = TOOL_CHIP_Y, W = tool_chip_w(), H = TOOL_CHIP_H;
     shade_box(&c, X, Y, W, H);
@@ -2801,13 +2815,14 @@ static const badge_t FISH_BADGES[6] = {
     { MS_FIRST_GRASS, &icon_ms_first_seagrass },      { MS_FIRST_BUBBLES, &icon_ms_first_bubbles },   /* (the third was "first reef" until 0.3.0) */
     { MS_FIRST_FOLLOW, &icon_ms_first_follow },       { MS_FIRST_DART, &icon_ms_first_dart },
 };
-#define TANK_BADGE_N 8
+#define TANK_BADGE_N 9
 static const badge_t TANK_BADGES[TANK_BADGE_N] = {
     { TMS_FIRST_FEEDING, &icon_ms_first_feeding },    { TMS_FIRST_TRIM, &icon_ms_first_trimming },
     { TMS_FIRST_CLEANING, &icon_ms_first_glass_cleaning }, { TMS_FIRST_FULL_NIGHT, &icon_ms_first_quiet_night },
     { TMS_FIRST_PLAY_SESSION, &icon_ms_first_play_session }, { TMS_CHANGED_SOMEONE, &icon_ms_tank_changed_someone },
     { TMS_FULL_SCHOOL, &icon_ms_full_school },        /* 2026-09-30: only once the shrimp are bought (tank_badge_shown) */
     { TMS_FIRST_REEF, &icon_ms_first_reef },          /* 2026-10-02: only once the reef cluster is bought */
+    { TMS_FIRST_SALE, &icon_ms_first_sale },          /* 0.3.5: a fish sold - the shop's fry */
 };
 /* the tank row's pages (2026-09-30, the seventh badge): six badges a page;
    with more, a small arrow at the row's right end (or a sideways swipe along
@@ -2815,11 +2830,12 @@ static const badge_t TANK_BADGES[TANK_BADGE_N] = {
 static int g_ms_tpage;                  /* the tank row's page (kept while a modal opens and closes; 0 on leaving the page) */
 /* which tank badges show: a bought thing's badge only once the thing is
    bought (the shrimp school's, the reef cluster's) - and, once earned, for
-   good, whatever was sold since */
+   good, whatever was sold since; the first sale's only once earned */
 static bool tank_badge_shown(const tank_t *t, int i) {
     uint32_t bit = TANK_BADGES[i].bit;
     if (bit == TMS_FULL_SCHOOL) return (t->sd_unlocks & SD_ITEM_SHRIMP)  || (t->tank_ms_bits & bit);
     if (bit == TMS_FIRST_REEF)  return (t->sd_unlocks & SD_ITEM_CLUSTER) || (t->tank_ms_bits & bit);
+    if (bit == TMS_FIRST_SALE)  return (t->tank_ms_bits & bit) != 0;   /* 0.3.5: once earned (its notice says what it opened) */
     return true;
 }
 static int tank_badge_n(const tank_t *t) {
@@ -3367,6 +3383,7 @@ void render_notice(const tank_t *t, uint16_t *fb, int stride, int kind, int fish
         for (int k = 0; k < TANK_BADGE_N; k++) if (TANK_BADGES[k].bit == bit) ic = TANK_BADGES[k].icon;
         int bi = 0; while (bi < 31 && !(bit & (1u << bi))) bi++;
         snprintf(caption, sizeof caption, "%s", bi < TMS_COUNT ? TMS_NAMES[bi] : "");
+        if (bit == TMS_FIRST_SALE) caption2 = "FRY NOW IN THE SHOP";   /* what the sale opened (0.3.5) */
         if (!ic && t->n_fish) {                               /* a population milestone: the newest fish */
             const fish_t *n = &t->fish[t->n_fish - 1];
             render_fish_preview(fb, stride, X + W / 2, Y + 48, n->size * 1.6f, n->color, n->fin, n->accent, t->clock);
@@ -3419,6 +3436,76 @@ static void price_tag(ctx_t *c, int x, int y, int price, uint32_t rgb) {   /* th
     char n[16]; snprintf(n, sizeof n, "%d", price);
     draw_text(c, x + 20, y, 2, rgb, n);
 }
+/* the FRY row (0.3.5): the first row once a fish has been sold. Rows are
+ * numbered across the pages; row 0 is FRY when it shows, the items after */
+#define SHP_MODAL_FRY 99             /* g_shp_modal: the fry's modal */
+static int g_shp_fry_pick;           /* the fry picked in its modal */
+static bool shp_fry(const tank_t *t) { return progression_fry_for_sale(t); }
+static int  shp_rows(const tank_t *t) { return SD_ITEM_COUNT + shp_fry(t); }
+static int  shp_pages(const tank_t *t) { return (shp_rows(t) + SHP_PER_PAGE - 1) / SHP_PER_PAGE; }
+static int  shp_item(const tank_t *t, int row) { return shp_fry(t) ? row - 1 : row; }   /* -1 = the FRY row */
+static void fry_hours(char *out, size_t n) {   /* "NEW FRY IN 14 H" / "IN 40 MIN" */
+    float s = progression_fry_new_in_s();
+    if (s >= 3600) snprintf(out, n, "NEW FRY IN %d H", (int)((s + 1799) / 3600));
+    else snprintf(out, n, "NEW FRY IN %d MIN", (int)(s / 60) + 1);
+}
+static void fry_draw(uint16_t *fb, int stride, float x, float y, float size, const fry_offer_t *o, float clock) {
+    fish_t f; memset(&f, 0, sizeof f);
+    f.stage = STAGE_FRY; f.color = o->body; f.fin = tank_fin_for(o->body); f.accent = o->accent;
+    render_fish_portrait(fb, stride, x, y, size, &f, clock);
+}
+static int fry_first_left(void) {
+    for (int k = 0; k < FRY_OFFER_N; k++) { fry_offer_t o; progression_fry_offer(k, &o); if (!o.sold) return k; }
+    return -1;
+}
+static void shop_fry_row(ctx_t *c, const tank_t *t, uint16_t *fb, int stride, int top) {
+    int k = fry_first_left();
+    bool room = progression_fry_room(t), can = t->sd_balance >= SD_PRICE_FRY;
+    if (k >= 0) { fry_offer_t o; progression_fry_offer(k, &o); fry_draw(fb, stride, 48, top + 16, 0.9f, &o, t->clock); }
+    draw_text(c, 76, top + 2, 2, 0xffffff, "FRY");
+    if (k < 0) { char l[24]; fry_hours(l, sizeof l); draw_text(c, 76, top + 20, 2, MSP_DIM, l); }
+    else price_tag(c, 76, top + 20, SD_PRICE_FRY, can && room ? MSP_TEAL : MSP_DIM);
+    const char *b = k < 0 ? "SOLD OUT" : !room ? "FULL" : "CHOOSE";
+    if (k >= 0 && room && can) { button(c, SHP_BTN_X, top, SHP_BTN_W, SHP_BTN_H, MSP_TEAL, MSP_TEAL, b, 2);
+                                 draw_text(c, SHP_BTN_X + (SHP_BTN_W - text_w(b, 2)) / 2, top + (SHP_BTN_H - 14) / 2, 2, MSP_INK, b); }
+    else button(c, SHP_BTN_X, top, SHP_BTN_W, SHP_BTN_H, 0x1c2f36, MSP_DIM, b, 2);
+}
+static void shop_fry_modal(ctx_t *c, const tank_t *t, uint16_t *fb, int stride) {
+    const int X = SHP_MODAL_X, Y = SHP_MODAL_Y, W = SHP_MODAL_W, H = SHP_MODAL_H;
+    rect_fill(c, X, Y, W, H, 0x04141a);
+    rect_edge(c, X, Y, W, H, MSP_TEAL); rect_edge(c, X + 1, Y + 1, W - 2, H - 2, 0x1c2f36);
+    draw_text(c, X + (W - text_w("FRY FOR SALE", 3)) / 2, Y + 14, 3, 0xffffff, "FRY FOR SALE");
+    for (int k = 0; k < FRY_OFFER_N; k++) {
+        fry_offer_t o; progression_fry_offer(k, &o);
+        int bx = SHP_FRY_BOX_X(k), by = SHP_FRY_BOX_Y;
+        bool lit = !o.sold && k == g_shp_fry_pick;
+        rect_fill(c, bx, by, SHP_FRY_BOX_W, SHP_FRY_BOX_H, lit ? 0x14303a : 0x0b1d23);
+        uint32_t e = lit ? 0xffffff : o.sold ? 0x1c2f36 : 0x4d6a72;
+        rect_edge(c, bx, by, SHP_FRY_BOX_W, SHP_FRY_BOX_H, e);
+        if (lit) rect_edge(c, bx + 1, by + 1, SHP_FRY_BOX_W - 2, SHP_FRY_BOX_H - 2, e);
+        if (o.sold) continue;                                    /* bought: a blank until the fresh three */
+        fry_draw(fb, stride, bx + SHP_FRY_BOX_W / 2, by + 34, 1.5f, &o, t->clock + k * 0.7f);
+        /* its colors, both: the body and the markings it grows into */
+        int sx = bx + SHP_FRY_BOX_W / 2 - 19, sy = by + SHP_FRY_BOX_H - 22;
+        rect_fill(c, sx, sy, 16, 14, o.body);   rect_edge(c, sx, sy, 16, 14, 0x1c2f36);
+        rect_fill(c, sx + 22, sy, 16, 14, o.accent); rect_edge(c, sx + 22, sy, 16, 14, 0x1c2f36);
+    }
+    bool room = progression_fry_room(t), can = t->sd_balance >= SD_PRICE_FRY;
+    fry_offer_t pk; progression_fry_offer(g_shp_fry_pick, &pk);
+    bool go = room && can && !pk.sold && progression_fry_left() > 0;
+    char line[32]; snprintf(line, sizeof line, "%d", SD_PRICE_FRY);
+    price_tag(c, X + (W - 20 - text_w(line, 2)) / 2, Y + 138, SD_PRICE_FRY, go ? 0xffffff : MSP_DIM);
+    if (!room) snprintf(line, sizeof line, t->n_fish >= POP_CAP ? "THE TANK IS FULL" : "WELCOME THE NEW FRY");
+    else if (!can) snprintf(line, sizeof line, "YOU HAVE %d", (int)t->sd_balance);
+    else line[0] = 0;
+    if (line[0]) draw_text(c, X + (W - text_w(line, 2)) / 2, Y + 160, 2, MSP_DIM, line);
+    fry_hours(line, sizeof line);
+    draw_text(c, X + (W - text_w(line, 2)) / 2, Y + 180, 2, 0x3f6a72, line);
+    const int bx = X + (W - MSP_HOW_W) / 2, by = Y + H - 12 - MSP_HOW_H;
+    if (go) { button(c, bx, by, MSP_HOW_W, MSP_HOW_H, MSP_TEAL, MSP_TEAL, "BUY", 2);
+              draw_text(c, bx + (MSP_HOW_W - text_w("BUY", 2)) / 2, by + (MSP_HOW_H - 14) / 2, 2, MSP_INK, "BUY"); }
+    else button(c, bx, by, MSP_HOW_W, MSP_HOW_H, 0x1c2f36, MSP_DIM, "BUY", 2);
+}
 void render_shop(const tank_t *t, uint16_t *fb, int stride) {
     ctx_t c = ctx_page(fb, stride);
     rect_fill(&c, -PAGE_X, -PAGE_Y, TANK_W, TANK_H, MSP_INK);
@@ -3427,13 +3514,14 @@ void render_shop(const tank_t *t, uint16_t *fb, int stride) {
     char bal[16]; snprintf(bal, sizeof bal, "%d", (int)t->sd_balance);
     draw_text(&c, SHP_HEAD_X, SHP_COIN_Y + 28, 4, 0xffffff, bal);
     for (int x = 24; x < PAGE_W - 24; x++) px_blend(&c, x, SHP_ROW_Y0 - 10, MSP_DIM, 200);
-    if (SHP_PAGES > 1) {
+    if (shp_pages(t) > 1) {
         shop_arrow(&c, SHP_ARROW_X0, SHP_ARROW_Y, false, g_shp_page > 0 ? MSP_TEAL : MSP_DIM);
-        shop_arrow(&c, SHP_ARROW_X1, SHP_ARROW_Y, true, g_shp_page < SHP_PAGES - 1 ? MSP_TEAL : MSP_DIM);
+        shop_arrow(&c, SHP_ARROW_X1, SHP_ARROW_Y, true, g_shp_page < shp_pages(t) - 1 ? MSP_TEAL : MSP_DIM);
     }
-    for (int i = g_shp_page * SHP_PER_PAGE; i < SD_ITEM_COUNT && i < (g_shp_page + 1) * SHP_PER_PAGE; i++) {
+    for (int r = g_shp_page * SHP_PER_PAGE; r < shp_rows(t) && r < (g_shp_page + 1) * SHP_PER_PAGE; r++) {
+        int top = SHP_ROW_Y0 + (r - g_shp_page * SHP_PER_PAGE) * SHP_ROW_DY, i = shp_item(t, r);
+        if (i < 0) { shop_fry_row(&c, t, fb, stride, top); continue; }
         const sd_item_t *it = &SD_ITEMS[i];
-        int top = SHP_ROW_Y0 + (i - g_shp_page * SHP_PER_PAGE) * SHP_ROW_DY;
         bool owned = (t->sd_unlocks & it->bit) != 0, can = t->sd_balance >= it->price;
         if (owned) blit_icon(&c, 32, top, shop_icon(i), 255); else blit_icon_locked(&c, 32, top, shop_icon(i));   /* (the rows are where the bowl is wide: their own column) */
         draw_text(&c, 76, top + 2, 2, 0xffffff, it->name);
@@ -3460,6 +3548,7 @@ void render_shop(const tank_t *t, uint16_t *fb, int stride) {
         draw_text(&c, X + (W - text_w("TAP TO CLOSE", 2)) / 2, Y + H - 24, 2, 0x3f6a72, "TAP TO CLOSE");
         return;
     }
+    if (g_shp_modal == SHP_MODAL_FRY) { shop_fry_modal(&c, t, fb, stride); return; }
     const sd_item_t *it = &SD_ITEMS[g_shp_modal];
     const int Y = SHP_MODAL_Y, H = SHP_MODAL_H;
     bool owned = (t->sd_unlocks & it->bit) != 0, can = t->sd_balance >= it->price;
@@ -3494,6 +3583,21 @@ void render_shop(const tank_t *t, uint16_t *fb, int stride) {
 int render_shop_tap(const tank_t *t, float x, float y) {
     x -= PAGE_X; y -= PAGE_Y;                    /* the page's own coordinates */
     if (g_shp_earn) { g_shp_earn = false; return SHOP_TAP_KEPT; }
+    if (g_shp_modal == SHP_MODAL_FRY) {                       /* the fry: a box picks, BUY buys the pick, elsewhere closes */
+        if (y >= SHP_FRY_BOX_Y - 8 && y < SHP_FRY_BOX_Y + SHP_FRY_BOX_H + 6)
+            for (int k = 0; k < FRY_OFFER_N; k++)
+                if (x >= SHP_FRY_BOX_X(k) - SHP_FRY_BOX_GAP / 2 && x < SHP_FRY_BOX_X(k) + SHP_FRY_BOX_W + SHP_FRY_BOX_GAP / 2) {
+                    fry_offer_t o; progression_fry_offer(k, &o);
+                    if (!o.sold) g_shp_fry_pick = k;
+                    return SHOP_TAP_KEPT;
+                }
+        const int bx = SHP_MODAL_X + (SHP_MODAL_W - MSP_HOW_W) / 2, by = SHP_MODAL_Y + SHP_MODAL_H - 12 - MSP_HOW_H;
+        bool on_btn = y >= by - MSP_HOW_SLOP_UP && y < by + MSP_HOW_H + MSP_HOW_SLOP_DN && x >= bx - MSP_HOW_SLOP_X && x < bx + MSP_HOW_W + MSP_HOW_SLOP_X;
+        fry_offer_t pk; progression_fry_offer(g_shp_fry_pick, &pk);
+        g_shp_modal = -1;
+        if (on_btn && !pk.sold && progression_fry_room(t) && t->sd_balance >= SD_PRICE_FRY) return SHOP_TAP_FRY + g_shp_fry_pick;
+        return SHOP_TAP_KEPT;
+    }
     if (g_shp_modal >= 0) {
         int item = g_shp_modal; const sd_item_t *it = &SD_ITEMS[item];
         bool owned = (t->sd_unlocks & it->bit) != 0, can = t->sd_balance >= it->price;
@@ -3515,14 +3619,18 @@ int render_shop_tap(const tank_t *t, float x, float y) {
     }
     if (x >= SHP_CLOSE_X - 6 && y >= MSP_CLOSE_Y - 4) return SHOP_TAP_CLOSE;
     if (x < SHP_EARN_X + SHP_EARN_W + 8 && y >= MSP_CLOSE_Y - 4) { g_shp_earn = true; return SHOP_TAP_KEPT; }
-    if (SHP_PAGES > 1 && y < SHP_ROW_Y0 - 10 && x >= SHP_ARROW_X0 - 8) {   /* the page arrows, in the header band */
+    if (shp_pages(t) > 1 && y < SHP_ROW_Y0 - 10 && x >= SHP_ARROW_X0 - 8) {   /* the page arrows, in the header band */
         if (x < SHP_ARROW_X1 - 4) { if (g_shp_page > 0) g_shp_page--; }
-        else if (g_shp_page < SHP_PAGES - 1) g_shp_page++;
+        else if (g_shp_page < shp_pages(t) - 1) g_shp_page++;
         return SHOP_TAP_KEPT;
     }
-    for (int i = g_shp_page * SHP_PER_PAGE; i < SD_ITEM_COUNT && i < (g_shp_page + 1) * SHP_PER_PAGE; i++) {
-        int top = SHP_ROW_Y0 + (i - g_shp_page * SHP_PER_PAGE) * SHP_ROW_DY;
-        if (x >= 20 && y >= top - 8 && y < top + SHP_ROW_DY - 8) { g_shp_modal = i; return SHOP_TAP_KEPT; }
+    for (int r = g_shp_page * SHP_PER_PAGE; r < shp_rows(t) && r < (g_shp_page + 1) * SHP_PER_PAGE; r++) {
+        int top = SHP_ROW_Y0 + (r - g_shp_page * SHP_PER_PAGE) * SHP_ROW_DY, i = shp_item(t, r);
+        if (x >= 20 && y >= top - 8 && y < top + SHP_ROW_DY - 8) {
+            if (i < 0) { int k = fry_first_left(); g_shp_fry_pick = k < 0 ? 0 : k; g_shp_modal = SHP_MODAL_FRY; }   /* the fry's modal, the first one left picked */
+            else g_shp_modal = i;
+            return SHOP_TAP_KEPT;
+        }
     }
     return SHOP_TAP_NONE;
 }

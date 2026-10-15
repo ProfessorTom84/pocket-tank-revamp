@@ -632,7 +632,12 @@ static void tank_task(void *arg) {
           else if (w == SET_TAP_ROTATE) ESP_LOGI(TAG, "settings: rotation %s", v ? (tank.orient_inv ? "LOCKED (turned over)" : "LOCKED (upright)") : "unlocked (the picture follows the tank)"); }
         if (touch_port_take_update() == UPD_TAP_CHECK) request_update();   /* the updates page's CHECK: save, restart into update mode */
         { int r = touch_port_take_shop();                               /* the shop's UNLOCK / MOVE / SELL */
-          if (r >= SHOP_TAP_SELL) {                                     /* sold back: the refund, the piece gone, the row for sale again */
+          if (r >= SHOP_TAP_FRY) {                                      /* a fry bought (0.3.5): the shop closes, the birth flow welcomes it */
+              int k = r - SHOP_TAP_FRY;
+              if (progression_buy_fry(&tank, k)) { touch_port_show_shop(false);
+                  ESP_LOGI(TAG, "shop: fry %d bought, %d sand dollars left, %d of %d left today", k, (int)tank.sd_balance, progression_fry_left(), FRY_OFFER_N); }
+              else ESP_LOGI(TAG, "shop: fry %d refused (balance %d, %d fish)", k, (int)tank.sd_balance, tank.n_fish);
+          } else if (r >= SHOP_TAP_SELL) {                              /* sold back: the refund, the piece gone, the row for sale again */
               int item = r - SHOP_TAP_SELL;
               if (progression_sell(&tank, item)) { audio_port_play(SND_CONFIRM, AUDIO_PITCH_ONE);
                   ESP_LOGI(TAG, "shop: %s sold back for %d, balance %d", SD_ITEMS[item].name, progression_sell_value(item), (int)tank.sd_balance); }

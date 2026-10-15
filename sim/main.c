@@ -32,6 +32,7 @@
  *   ./fishsim --selftest-llm [min]   headless LLM path (real-time if min > 0)
  *   ./fishsim --selftest-pop         headless population/arrival/save check
  *   ./fishsim --selftest-card [pfx]  headless fish card: RENAME and SELL (pfx: also writes its pages as PPMs)
+ *   ./fishsim --selftest-fry [pfx]   headless fry for sale (0.3.5): the first sale, the offer, buying, the day, the save
  *   ./fishsim --selftest-sleep       headless sleep metabolism + ravenous begging
  *   ./fishsim --selftest-tend        headless canopy/algae/hold-attract check
  *   ./fishsim --selftest-hunger      headless hunger economy (untended tank never ravenous)
@@ -994,10 +995,12 @@ static int selftest_sleep(void) {
 #endif
             r = SET_TAP_AT(SET_CLOSE_X + 40, SET_FOOT_Y + 10);
             if (r != SET_TAP_CLOSE) { printf("FAIL: CLOSE -> %d\n", r); return 1; }
+            tank_lock_tools(&tank, true);                   /* the toolbox's LOCK rides in the save too (0.3.5) */
             progression_save(&tank); tank_init(&tank, 8); progression_boot(&tank);
             if (tank.light_idle_s != 30 || !tank.light_auto) { printf("FAIL: light settings did not survive the save (%d s)\n", tank.light_idle_s); return 1; }
             if (!tank.autofeed_off) { printf("FAIL: AUTO FEED OFF did not survive the save\n"); return 1; }
-            tank.light_idle_s = LIGHT_IDLE_S; tank.light_auto = false; tank.autofeed_off = false;
+            if (!tank.tools_locked) { printf("FAIL: the toolbox's LOCK did not survive the save\n"); return 1; }
+            tank.light_idle_s = LIGHT_IDLE_S; tank.light_auto = false; tank.autofeed_off = false; tank_lock_tools(&tank, false);
             printf("selftest-sleep: settings: LIGHTS OUT one row (the double-tap, saved / 5 SEC .. 30 MIN, both ends hold, a wheel-era 20 s), 30 s honoured, AUTO FEED, saved\n");
             #undef SET_TAP_AT
             #undef SET_TOUCH
@@ -1113,6 +1116,14 @@ static int saves_check(const char *what, const uint8_t *e, float bubble_default)
     if (tank.bubble_x != bx) SV_FAIL("bubble column %.0f, want %.0f", tank.bubble_x, bx);
     int idle = e[1476] | e[1477] << 8;
     if (tank.light_tip_seen != (e[1684] != 0)) SV_FAIL("the lights-out notice's mark %d", tank.light_tip_seen);
+    if (tank.tools_locked != (e[1685] != 0)) SV_FAIL("the toolbox's lock %d", tank.tools_locked);
+    {   /* the fry offer (0.3.5): its blanks (1686) and its clock in minutes (1654) */
+        int sold = e[1686] & 7, left = 3 - ((sold & 1) + (sold >> 1 & 1) + (sold >> 2 & 1));
+        int mins = e[1654] | e[1655] << 8;
+        if (progression_fry_left() != left) SV_FAIL("%d fry left, the file's blanks %x say %d", progression_fry_left(), sold, left);
+        if (fabsf(progression_fry_new_in_s() - (FRY_OFFER_S - mins * 60.0f)) > 1) SV_FAIL("a fresh three in %.0f s, the file's %d min say %.0f", progression_fry_new_in_s(), mins, FRY_OFFER_S - mins * 60.0f);
+        if (((sv_u32(e, 36) & TMS_FIRST_SALE) != 0) != progression_fry_for_sale(&tank)) SV_FAIL("fry for sale %d", progression_fry_for_sale(&tank));
+    }
     if (tank.light_idle_s != (idle ? idle : LIGHT_IDLE_S) || tank.light_auto != (e[1478] != 0)) SV_FAIL("light settings %d s auto %d", tank.light_idle_s, tank.light_auto);
     if (tank.sd_balance != (int32_t)sv_u32(e, 1480) || tank.sd_earned != (int32_t)sv_u32(e, 1484) ||
         tank.sd_unlocks != (sv_u32(e, 1488) & ((1u << SD_ITEM_COUNT) - 1))) SV_FAIL("sand dollars %d (earned %d), unlocks %02x", tank.sd_balance, tank.sd_earned, tank.sd_unlocks);
@@ -1149,7 +1160,16 @@ static int saves_load(const char *what, const uint8_t *bytes, size_t len, const 
     tank_init(&tank, 9); progression_wake(&tank, 0);
     char again[300]; snprintf(again, sizeof again, "%s, saved and reloaded", what);
     if (progression_loaded_release() != PT_RELEASE_NUM) { printf("FAIL: %s: re-saved, the stamp is %06x, not this release's %06x\n", again, progression_loaded_release(), PT_RELEASE_NUM); return 1; }
-    return saves_check(again, e, bx0);
+    if (saves_check(again, e, bx0)) return 1;
+    /* every fish keeps the stage it was saved at (0.3.5): these tanks grew up
+     * on the shorter stage times - elders at 24..40 h that the 4-day elder
+     * would call adults. A tick of no time runs the stage rule (last: the tick may pay
+     * the stages' sand dollars, which the byte checks above would see). */
+    progression_tick(&tank, 0);
+    for (int i = 0; i < tank.n_fish && i < e[23]; i++)
+        if (tank.fish[i].stage != (e[40 + 68 * i + 1] & 3)) {
+            printf("FAIL: %s: fish %d is stage %d after a tick, saved at %d (%.1f h)\n", what, i, tank.fish[i].stage, e[40 + 68 * i + 1] & 3, progression_age_s(&tank, i) / 3600); return 1; }
+    return 0;
 }
 
 static int selftest_saves(void) {
@@ -1679,6 +1699,69 @@ static int selftest_tend(void) {
             printf("FAIL: the toolbox's tap test\n"); return 1; }
         for (int i = 0; i < ALGAE_CELLS; i++) tank.algae[i] = 0;
         tank_veg_set(&tank, 1, 1.0f);
+    }
+    /* the LOCK (0.3.5): locked, the bare-finger floor sweep that mows a bed
+     * and wipes the glass does neither, and the wall stroke takes no wall
+     * frond; the tools still do their work; the tap test sits right of the
+     * box and never on it. And the DONE chip steps aside while a stroke is
+     * on the glass, and the sponge wipes the film under it. */
+    {
+        float x0, x1, ty; tank_veg_bed(&tank, 1, &x0, &x1, &ty, NULL);
+        int n; tank_veg_bed(&tank, 1, NULL, NULL, NULL, &n);
+        float fl; tank_veg_frond(&tank, 1, n - 1, &fl);
+        tank_set_tool(&tank, TOOL_HAND); tank_lock_tools(&tank, true);
+        for (int i = 0; i < ALGAE_CELLS; i++) tank.algae[i] = 200;
+        int32_t cleaned = tank.cells_cleaned, trims = tank.trims;
+        for (float sx = x0 + 2; sx <= x1; sx += 4) tank_touch_drag(&tank, sx, TANK_BOT - 8.0f);
+        tank_tick(&tank, 1.0f / 60.0f, advisor_rules); tank_tick(&tank, 1.0f / 60.0f, advisor_rules);
+        tank_veg_set(&tank, 1, 0.11f); tank.veg_h[1][n - 1] = 0.90f; tank_veg_sync(&tank);
+        for (float sx = fl - 70; sx <= fl - 19; sx += 4) tank_touch_drag(&tank, sx, 200.0f);
+        tank_tick(&tank, 1.0f / 60.0f, advisor_rules); tank_tick(&tank, 1.0f / 60.0f, advisor_rules);
+        if (tank.cells_cleaned != cleaned || tank.trims != trims || tank.veg_h[1][n - 1] < 0.90f) {
+            printf("FAIL: locked, a bare finger still tended (cleaned %d, trims %d, wall frond %.2f)\n",
+                   (int)(tank.cells_cleaned - cleaned), (int)(tank.trims - trims), tank.veg_h[1][n - 1]); return 1; }
+        tank_veg_set(&tank, 1, 1.0f);
+        tank_set_tool(&tank, TOOL_SPONGE);
+        for (float sx = x0 + 2; sx <= x1; sx += 4) tank_touch_drag(&tank, sx, TANK_BOT - 8.0f);
+        tank_tick(&tank, 1.0f / 60.0f, advisor_rules); tank_tick(&tank, 1.0f / 60.0f, advisor_rules);
+        if (tank.cells_cleaned == cleaned) { printf("FAIL: locked, the sponge wiped nothing\n"); return 1; }
+        tank_set_tool(&tank, TOOL_SCISSORS);
+        for (float sx = x1 + 60; sx >= x0 - 40; sx -= 4) tank_touch_drag(&tank, sx, 250.0f);
+        tank_tick(&tank, 1.0f / 60.0f, advisor_rules); tank_tick(&tank, 1.0f / 60.0f, advisor_rules);
+        if (tank.veg_growth[1] > 0.999f) { printf("FAIL: locked, the scissors cut nothing\n"); return 1; }
+        tank_set_tool(&tank, TOOL_HAND); tank_veg_set(&tank, 1, 1.0f);
+        const int by = RENDER_TOOLS_Y + RENDER_TOOLS_H / 2;
+        if (!render_lock_hit(RENDER_LOCK_X + RENDER_LOCK_W / 2, by) || render_lock_hit(RENDER_TOOLS_X + RENDER_TOOLS_W - 4, by) ||
+            render_tools_hit(RENDER_LOCK_X + 2, by) >= 0 || render_lock_hit(RENDER_LOCK_X + RENDER_LOCK_W / 2, RENDER_TOOLS_Y - 4) ||
+            RENDER_LOCK_X + RENDER_LOCK_W > TANK_W) {
+            printf("FAIL: the lock's tap test\n"); return 1; }
+        printf("selftest-tend: LOCKED - the bare sweep and the wall stroke tended nothing, the sponge and the scissors still work\n");
+        tank_lock_tools(&tank, false);
+        /* the chip: find it on an empty frame, then a stroke hides it and the sponge clears what it covered */
+        static uint16_t chipfb[TANK_W * TANK_H];
+        tank_set_tool(&tank, TOOL_SPONGE);
+        memset(chipfb, 0, sizeof chipfb); render_tool_chip(&tank, -1, chipfb, TANK_W);
+        int cx0 = TANK_W, cx1 = -1, cy0 = TANK_H, cy1 = -1;
+        for (int y = 0; y < TANK_H; y++) for (int x = 0; x < TANK_W; x++)
+            if (chipfb[y * TANK_W + x]) { if (x < cx0) cx0 = x; if (x > cx1) cx1 = x; if (y < cy0) cy0 = y; if (y > cy1) cy1 = y; }
+        if (cx1 < 0) { printf("FAIL: no DONE chip with the sponge in hand\n"); return 1; }
+        for (int i = 0; i < ALGAE_CELLS; i++) tank.algae[i] = 200;
+        int cmx = (cx0 + cx1) / 2, cmy = (cy0 + cy1) / 2;
+        tank_touch_drag(&tank, (float)cmx, (float)cmy);       /* a press on DONE (a tap to come): the chip stays */
+        memset(chipfb, 0, sizeof chipfb); render_tool_chip(&tank, -1, chipfb, TANK_W);
+        if (!chipfb[cmy * TANK_W + cmx]) { printf("FAIL: the DONE chip vanished under a press\n"); return 1; }
+        tank_tick(&tank, 1.0f / 60.0f, advisor_rules); tank_tick(&tank, 1.0f / 60.0f, advisor_rules);
+        for (int i = 0; i < ALGAE_CELLS; i++) tank.algae[i] = 200;
+        for (float sx = cx0 + 4; sx <= cx1 - 4; sx += 4) tank_touch_drag(&tank, sx, (float)cmy);
+        memset(chipfb, 0, sizeof chipfb); render_tool_chip(&tank, -1, chipfb, TANK_W);
+        for (int i = 0; i < TANK_W * TANK_H; i++) if (chipfb[i]) { printf("FAIL: the DONE chip stayed over a stroke\n"); return 1; }
+        tank_tick(&tank, 1.0f / 60.0f, advisor_rules); tank_tick(&tank, 1.0f / 60.0f, advisor_rules);
+        if (tank.algae[(cmy / ALGAE_CELL) * ALGAE_COLS + cmx / ALGAE_CELL]) { printf("FAIL: the sponge left the film under the DONE chip\n"); return 1; }
+        memset(chipfb, 0, sizeof chipfb); render_tool_chip(&tank, -1, chipfb, TANK_W);
+        if (!chipfb[cmy * TANK_W + cmx]) { printf("FAIL: the DONE chip did not come back after the stroke\n"); return 1; }
+        printf("selftest-tend: the DONE chip (%d..%d x %d..%d) stepped aside for the stroke, the sponge wiped under it, back on the lift\n", cx0, cx1, cy0, cy1);
+        tank_set_tool(&tank, TOOL_HAND);
+        for (int i = 0; i < ALGAE_CELLS; i++) tank.algae[i] = 0;
     }
     /* ...then the mow: one sweep along the floor takes every frond of a bed
      * to nubs, never bare */
@@ -2355,6 +2438,11 @@ static int snapshot(const char *prefix, int seconds) {
     render_tank(&tank, fb, TANK_W); render_tool_chip(&tank, -1, fb, TANK_W);
     snprintf(path, sizeof path, "%s_tool_chip.ppm", prefix); write_ppm(path, fb);
     tank_set_tool(&tank, TOOL_HAND);
+    /* ... and bare hands with the LOCK shut (0.3.5) */
+    tank_lock_tools(&tank, true);
+    render_tank(&tank, fb, TANK_W); render_stats_card(&tank, 0, fb, TANK_W);
+    snprintf(path, sizeof path, "%s_tools_locked.ppm", prefix); write_ppm(path, fb);
+    tank_lock_tools(&tank, false);
     /* the milestones page: everything seen but one fish badge and one tank
        badge (they wear the "new" ring), and a tapped badge's caption */
     for (int i = 0; i < tank.n_fish; i++) tank.fish[i].ms_seen = tank.fish[i].ms_bits;
@@ -4066,6 +4154,140 @@ static int selftest_card(const char *prefix) {
     return 0;
 }
 
+/* --selftest-fry [prefix] (0.3.5): FRY FOR SALE. Nothing before a sale;
+ * the first sale earns its badge and puts three fry in the shop's first
+ * row, three bodies, markings never the body's, all from 0.4's palette; a
+ * box picks, BUY buys the pick; a bought one is a parentless newborn (the
+ * welcome says "FROM THE SHOP"), its place a blank, no second buy while a
+ * welcome is owed; two can be bought in a day, none comes back until the
+ * offer's 24 h of tank time (asleep too) bring a fresh three; no room = no
+ * sale, and the last slot calls off a staged fry; the offer and its blanks
+ * ride in the save; a tank that sold before 0.3.5 gets its badge. */
+#define FRY_FAIL(...) do { printf("FAIL: selftest-fry: "); printf(__VA_ARGS__); printf("\n"); return 1; } while (0)
+static int selftest_fry(const char *prefix) {
+    const float DT = 1.0f / 60.0f;
+    static uint16_t fb[TANK_W * TANK_H];
+    char path[300];
+    setenv("POCKET_TANK_SAVE", "/tmp/pocket-tank-selftest-fry.sav", 1);
+    (void)system("rm -f /tmp/pocket-tank-selftest-fry.sav");
+    tank_init(&tank, 81); progression_boot(&tank); progression_setup_done(&tank);
+    progression_force_arrival(&tank); progression_newborn_done(&tank);
+    if (tank.n_fish != 3) FRY_FAIL("the staged tank has %d fish, want 3", tank.n_fish);
+    tank.sd_balance = 0;
+    /* before any sale: no fry, the first row is the plant */
+    if (progression_fry_for_sale(&tank) || progression_buy_fry(&tank, 0)) FRY_FAIL("fry for sale before a fish was sold");
+    render_shop_leave();
+    if (shop_tap(SHOP_ROW_X, SHOP_ROW_Y(0)) != SHOP_TAP_KEPT) FRY_FAIL("the first row did not open a modal");
+    tank.sd_balance = 1000;
+    if (shop_tap(SHOP_BTN_X, SHOP_BTN_Y) != SHOP_TAP_BUY + 0) FRY_FAIL("the first row is not the plant before a sale");
+    tank.sd_balance = 0; render_shop_leave();
+
+    /* the first sale: the badge (and its notice), three fry */
+    notice_sync(&tank);
+    if (!progression_sell_fish(&tank, 2)) FRY_FAIL("the sale was refused");
+    if (!(tank.tank_ms_bits & TMS_FIRST_SALE) || !progression_fry_for_sale(&tank) || progression_fry_left() != FRY_OFFER_N)
+        FRY_FAIL("after the first sale: badge %d, for sale %d, %d left", !!(tank.tank_ms_bits & TMS_FIRST_SALE), progression_fry_for_sale(&tank), progression_fry_left());
+    for (int i = 0; i < 180 && !notice_current(); i++) notice_tick(&tank, DT, false);
+    if (!notice_current() || notice_current()->kind != NOTICE_TANK_MILESTONE || notice_current()->bit != TMS_FIRST_SALE) FRY_FAIL("no FIRST FISH SOLD notice");
+    while (notice_current()) notice_dismiss();
+    fry_offer_t of[FRY_OFFER_N];
+    for (int k = 0; k < FRY_OFFER_N; k++) {
+        progression_fry_offer(k, &of[k]);
+        bool on = false; for (int i = 0; i < LOOK_N; i++) on |= LOOK_BODY[i] == of[k].body;
+        if (!on || of[k].accent == of[k].body || of[k].sold) FRY_FAIL("fry %d: body %06x accent %06x sold %d", k, of[k].body, of[k].accent, of[k].sold);
+        for (int j = 0; j < k; j++) if (of[j].body == of[k].body) FRY_FAIL("fry %d and %d share a body", j, k);
+    }
+    printf("selftest-fry: the first sale earned its badge (and notice); three fry: %06x/%06x %06x/%06x %06x/%06x\n",
+           of[0].body, of[0].accent, of[1].body, of[1].accent, of[2].body, of[2].accent);
+
+    /* the shop: FRY is the first row, its modal picks and buys */
+    render_shop_leave(); render_shop(&tank, fb, TANK_W);
+    if (prefix) { snprintf(path, sizeof path, "%s_fry_row.ppm", prefix); write_ppm(path, fb); }
+    const float boxy = SHP_FRY_BOX_Y + SHP_FRY_BOX_H / 2;
+    if (shop_tap(SHOP_ROW_X, SHOP_ROW_Y(0)) != SHOP_TAP_KEPT) FRY_FAIL("the FRY row did not open its modal");
+    if (shop_tap(SHOP_BTN_X, SHOP_BTN_Y) != SHOP_TAP_KEPT) FRY_FAIL("BUY with no dollars did something");
+    tank.sd_balance = 2 * SD_PRICE_FRY + 50;
+    shop_tap(SHOP_ROW_X, SHOP_ROW_Y(0));
+    if (shop_tap(SHP_FRY_BOX_X(1) + SHP_FRY_BOX_W / 2, boxy) != SHOP_TAP_KEPT) FRY_FAIL("the second box's tap");
+    render_shop(&tank, fb, TANK_W);
+    if (prefix) { snprintf(path, sizeof path, "%s_fry_modal.ppm", prefix); write_ppm(path, fb); }
+    int r = shop_tap(SHOP_BTN_X, SHOP_BTN_Y);
+    if (r != SHOP_TAP_FRY + 1) FRY_FAIL("BUY on the second fry returned %d", r);
+    int n0 = tank.n_fish;
+    if (!progression_buy_fry(&tank, 1)) FRY_FAIL("the second fry was refused");
+    int slot = tank.n_fish - 1; const fish_t *nf = &tank.fish[slot];
+    if (tank.n_fish != n0 + 1 || nf->stage != STAGE_FRY || nf->parent_a != -1 || nf->parent_b != -1 || nf->color != of[1].body || nf->accent != of[1].accent ||
+        progression_newborn() != slot || tank.sd_balance != SD_PRICE_FRY + 50 || progression_fry_left() != 2 || progression_age_s(&tank, slot) != 0)
+        FRY_FAIL("the bought fry: %d fish, stage %d, parents %d/%d, %06x/%06x, owed %d, balance %d, %d left",
+                 tank.n_fish, nf->stage, nf->parent_a, nf->parent_b, nf->color, nf->accent, progression_newborn(), tank.sd_balance, progression_fry_left());
+    if (progression_buy_fry(&tank, 0)) FRY_FAIL("a second fry sold while the first was owed its welcome");
+    if (progression_buy_fry(&tank, 1)) FRY_FAIL("a bought fry was sold again");
+    /* its welcome: from the shop */
+    if (setup_poll_birth(&tank) != slot || !setup_is_birth() || setup_page() != SETUP_PG_BORN) FRY_FAIL("the bought fry's welcome did not open");
+    render_tank(&tank, fb, TANK_W); render_setup(&tank, fb, TANK_W, 1.0f);
+    if (prefix) { snprintf(path, sizeof path, "%s_fry_born.ppm", prefix); write_ppm(path, fb); }
+    setup_activate(&tank, SETUP_HIT_NEXT); setup_touch(&tank, 0, 0, false);
+    setup_activate(&tank, SETUP_HIT_NEXT);
+    if (setup_page() != SETUP_PG_FAMILY) FRY_FAIL("the welcome did not reach the family page");
+    render_tank(&tank, fb, TANK_W); render_setup(&tank, fb, TANK_W, 1.0f);
+    if (prefix) { snprintf(path, sizeof path, "%s_fry_family.ppm", prefix); write_ppm(path, fb); }
+    setup_activate(&tank, SETUP_HIT_NEXT);
+    if (setup_active() || progression_newborn() >= 0) FRY_FAIL("DONE did not close the welcome");
+    /* the second of the day; then the dollars run out */
+    if (!progression_buy_fry(&tank, 0)) FRY_FAIL("the first fry was refused after the welcome");
+    progression_newborn_done(&tank);
+    if (progression_fry_left() != 1 || tank.sd_balance != 50) FRY_FAIL("after two: %d left, balance %d", progression_fry_left(), tank.sd_balance);
+    if (progression_buy_fry(&tank, 2)) FRY_FAIL("a fry sold for %d of %d dollars", tank.sd_balance, SD_PRICE_FRY);
+    render_shop_leave(); shop_tap(SHOP_ROW_X, SHOP_ROW_Y(0)); render_shop(&tank, fb, TANK_W);
+    if (prefix) { snprintf(path, sizeof path, "%s_fry_modal_two_bought.ppm", prefix); write_ppm(path, fb); }
+    render_shop_leave();
+    printf("selftest-fry: two bought in a day (the second after the first's welcome), %d left, blanks where they stood\n", progression_fry_left());
+
+    /* nothing comes back within the day, awake or asleep; then a fresh three */
+    for (int i = 0; i < 3600; i++) progression_tick(&tank, 1.0f);   /* an hour awake */
+    progression_slept(&tank, 20 * 3600.0f);
+    if (progression_fry_left() != 1) FRY_FAIL("the blanks filled within the day (%d left)", progression_fry_left());
+    float wait = progression_fry_new_in_s();
+    if (wait <= 0 || wait > 3 * 3600 + 60) FRY_FAIL("a fresh three in %.0f s, want ~3 h", wait);
+    /* the offer and its blanks ride in the save */
+    progression_save(&tank);
+    fry_offer_t was[FRY_OFFER_N]; for (int k = 0; k < FRY_OFFER_N; k++) progression_fry_offer(k, &was[k]);
+    tank_init(&tank, 82); progression_wake(&tank, 0);
+    for (int k = 0; k < FRY_OFFER_N; k++) { fry_offer_t o; progression_fry_offer(k, &o);
+        if (o.body != was[k].body || o.accent != was[k].accent || o.sold != was[k].sold) FRY_FAIL("fry %d changed in the save", k); }
+    if (!progression_fry_for_sale(&tank) || fabsf(progression_fry_new_in_s() - wait) > 61) FRY_FAIL("the offer's clock in the save: %.0f s, was %.0f", progression_fry_new_in_s(), wait);
+    progression_slept(&tank, wait + 1);
+    if (progression_fry_left() != FRY_OFFER_N) FRY_FAIL("no fresh three after the day (%d left)", progression_fry_left());
+    printf("selftest-fry: the blanks held through 21 h (20 asleep) and a save, then a fresh three\n");
+
+    /* no room, no sale; the last slot calls off a staged fry */
+    tank.sd_balance = 10 * SD_PRICE_FRY;
+    while (tank.n_fish < POP_CAP - 1) { progression_force_arrival(&tank); progression_newborn_done(&tank); }
+    progression_stage_arrival(&tank);
+    if (!progression_buy_fry(&tank, 0)) FRY_FAIL("the last slot was refused");
+    progression_newborn_done(&tank);
+    if (tank.n_fish != POP_CAP || progression_arrival_pending()) FRY_FAIL("the last slot: %d fish, staged %d", tank.n_fish, progression_arrival_pending());
+    if (progression_fry_room(&tank) || progression_buy_fry(&tank, 1)) FRY_FAIL("a fry sold into a full tank");
+    render_shop_leave(); render_shop(&tank, fb, TANK_W);
+    if (prefix) { snprintf(path, sizeof path, "%s_fry_row_full.ppm", prefix); write_ppm(path, fb); }
+    printf("selftest-fry: the last slot called off a staged fry; a full tank sells none\n");
+
+    /* a tank that sold a fish before 0.3.5: the badge at its first tick */
+    tank.tank_ms_bits &= ~TMS_FIRST_SALE;
+    progression_tick(&tank, DT);
+    if (!(tank.tank_ms_bits & TMS_FIRST_SALE)) FRY_FAIL("a tank that had sold a fish did not get its badge");
+    render_milestones_leave();
+    printf("selftest-fry: a tank that sold before 0.3.5 gets the badge\n");
+    /* the clocks hold their seconds that far out (0.3.5: a float summed per
+     * frame ran 9% off by 96 h): an hour at the device's ~22 fps from 95 h */
+    progression_set_age(&tank, 0, 95 * 3600.0f);
+    for (int i = 0; i < 22 * 3600; i++) progression_tick(&tank, 1.0f / 22);
+    float a = progression_age_s(&tank, 0);
+    if (fabsf(a - 96 * 3600.0f) > 1.0f || tank.fish[0].stage != STAGE_ELDER) FRY_FAIL("an hour at 22 fps from 95 h made %.1f s (want %.0f), stage %d", a, 96 * 3600.0f, tank.fish[0].stage);
+    printf("selftest-fry: an hour of frames at 22 fps from 95 h = %.2f h, an elder\nselftest-fry: OK\n", a / 3600);
+    return 0;
+}
+
 int main(int argc, char **argv) {
     for (int a = 1; a < argc; a++)
         if (strcmp(argv[a], "--greedy") == 0) advisor_core_sample = false;
@@ -4083,6 +4305,7 @@ int main(int argc, char **argv) {
         if (strcmp(argv[a], "--selftest-saves") == 0) return selftest_saves();
         if (strcmp(argv[a], "--selftest-pop") == 0) return selftest_pop();
         if (strcmp(argv[a], "--selftest-card") == 0) return selftest_card(a + 1 < argc ? argv[a + 1] : NULL);
+        if (strcmp(argv[a], "--selftest-fry") == 0) return selftest_fry(a + 1 < argc ? argv[a + 1] : NULL);
         if (strcmp(argv[a], "--selftest-sleep") == 0) return selftest_sleep();
         if (strcmp(argv[a], "--selftest-tend") == 0) return selftest_tend();
         if (strcmp(argv[a], "--selftest-update") == 0) return selftest_update();
@@ -4236,6 +4459,12 @@ int main(int argc, char **argv) {
             else if (shop_view) {                       /* the shop: a row's modal, UNLOCK, HOW TO EARN, CLOSE */
                 int r = render_shop_tap(&tank, (float)press_x, (float)press_y);
                 if (r == SHOP_TAP_CLOSE) { shop_view = false; render_shop_leave(); milestones_view = true; }   /* back to the milestones page */
+                else if (r >= SHOP_TAP_FRY) {               /* a fry bought (0.3.5): the shop closes, the birth flow welcomes it */
+                    int k = r - SHOP_TAP_FRY;
+                    if (progression_buy_fry(&tank, k)) { shop_view = false; render_shop_leave();
+                        printf("shop: fry %d bought, %d sand dollars left, %d of %d left today\n", k, tank.sd_balance, progression_fry_left(), FRY_OFFER_N); }
+                    else printf("shop: fry %d refused (balance %d, %d fish)\n", k, tank.sd_balance, tank.n_fish);
+                }
                 else if (r >= SHOP_TAP_SELL) {              /* sold back (the second tap on SELL) */
                     int item = r - SHOP_TAP_SELL;
                     if (progression_sell(&tank, item)) { snd(SND_CONFIRM, AUDIO_PITCH_ONE); printf("shop: %s sold back for %d, balance %d\n", SD_ITEMS[item].name, progression_sell_value(item), tank.sd_balance); }
@@ -4301,6 +4530,11 @@ int main(int argc, char **argv) {
                     int tl = render_tools_hit((float)press_x, (float)press_y);
                     tank_set_tool(&tank, tank.tool == tl ? TOOL_HAND : tl); selected_fish = -1;
                     printf("toolbox: %s\n", tank.tool == TOOL_SPONGE ? "the SPONGE - strokes only wipe" : tank.tool == TOOL_SCISSORS ? "the SCISSORS - strokes only cut" : "back to bare hands");
+                }
+                else if (selected_fish >= 0 && selected_fish < tank.n_fish && render_lock_hit((float)press_x, (float)press_y)) {
+                    /* the LOCK beside the toolbox (0.3.5): the card stays */
+                    tank_lock_tools(&tank, !tank.tools_locked); progression_settings_changed();
+                    printf("toolbox: %s\n", tank.tools_locked ? "LOCKED - bare fingers neither wipe nor cut" : "unlocked - bare fingers wipe and cut");
                 }
                 else if (selected_fish >= 0 && selected_fish != RENDER_CARD_SNAIL && selected_fish != RENDER_CARD_SHRIMP && selected_fish != RENDER_CARD_URCHIN
                          && RENDER_CARD_HIT(press_x, press_y))

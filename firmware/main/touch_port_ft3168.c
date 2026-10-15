@@ -589,7 +589,7 @@ void touch_port_poll(tank_t *t) {
             if (s_set || s_upd || s_back) { s_back = false; goto released; }   /* the settings / updates page had the glass (their touch calls above) */
             if (s_shop) {                                           /* the shop: a row's modal, UNLOCK, HOW TO EARN, CLOSE */
                 int r = render_shop_tap(t, s_px, s_py);
-                ESP_LOGI(TAG, "shop tap at %.0f,%.0f -> %s", s_px, s_py, r == SHOP_TAP_CLOSE ? "CLOSE" : r >= SHOP_TAP_SELL ? "SELL" : r >= SHOP_TAP_MOVE ? "MOVE" : r >= SHOP_TAP_BUY ? "UNLOCK" : r == SHOP_TAP_KEPT ? "modal" : "nothing");
+                ESP_LOGI(TAG, "shop tap at %.0f,%.0f -> %s", s_px, s_py, r == SHOP_TAP_CLOSE ? "CLOSE" : r >= SHOP_TAP_FRY ? "BUY A FRY" : r >= SHOP_TAP_SELL ? "SELL" : r >= SHOP_TAP_MOVE ? "MOVE" : r >= SHOP_TAP_BUY ? "UNLOCK" : r == SHOP_TAP_KEPT ? "modal" : "nothing");
                 if (r == SHOP_TAP_CLOSE) { s_shop = false; render_shop_leave(); s_ms = true; }   /* back to the milestones page (2026-09-16) */
                 else if (r >= SHOP_TAP_BUY) s_shop_act = r;   /* main.c buys (and plays the cue) or opens the placement page */
                 goto released;
@@ -632,6 +632,12 @@ void touch_port_poll(tank_t *t) {
                 int tl = render_tools_hit(s_px, s_py);
                 tank_set_tool(t, t->tool == tl ? TOOL_HAND : tl); s_sel = -1;
                 ESP_LOGI(TAG, "toolbox tap at %.0f,%.0f -> %s", s_px, s_py, t->tool == TOOL_SPONGE ? "SPONGE" : t->tool == TOOL_SCISSORS ? "SCISSORS" : "bare hands");
+                goto released;
+            }
+            if (s_sel >= 0 && s_sel < t->n_fish && render_lock_hit(s_px, s_py)) {   /* the LOCK beside it (0.3.5): bare fingers
+                                                                                 wipe and cut, or only the tools do; the card stays */
+                tank_lock_tools(t, !t->tools_locked); progression_settings_changed(); s_sel_us = now;
+                ESP_LOGI(TAG, "lock tap at %.0f,%.0f -> %s", s_px, s_py, t->tools_locked ? "LOCKED: only the tools wipe and cut" : "unlocked: bare fingers wipe and cut");
                 goto released;
             }
             if ((s_sel < 0 || s_sel >= t->n_fish) && render_tool_chip_hit(t, s_px, s_py)) {   /* the tool chip's DONE */

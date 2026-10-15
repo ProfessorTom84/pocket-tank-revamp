@@ -35,3 +35,4 @@ What is here:
 | `2026-09-29-1664-shrimp.sav` | the 1656 tank above, loaded and saved by the shrimp build: plus a school of 6 shrimp, 7 pellets toward the next, 321 s of cooldown |
 | `2026-09-29-1672-v0.2.0.sav` | the release save for **v0.2.0**: the shrimp tank above loaded and saved by the 0.2.0 build (release stamp 0x000200 at 1664) |
 | `2026-10-02-1688-urchin.sav` | the v0.2.0 save above grown to 1688 (built by hand from it: the watch's SCREEN byte 0, then the urchin tail): the urchin bought (unlock bit 6), at x 212, 4321.5 px of grass eaten |
+| `2026-10-14-1688-fry.sav` | the release save for **v0.3.5**: the urchin save above loaded by 0.3.5, its welcome finished, the toolbox's LOCK shut (1685), the fry shop open (tank badge bit 14), fry 1 bought (blanks 0x02 at 1686, now 6 fish), offer seed 0x7ee7 (1646), 5 h on the offer's clock (300 min at 1654) |

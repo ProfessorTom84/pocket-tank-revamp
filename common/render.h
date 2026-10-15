@@ -132,10 +132,22 @@ void render_set_card_cache(uint16_t *buf);
 #define RENDER_TOOLS_W RENDER_CARD_W
 #define RENDER_TOOLS_H 70
 int  render_tools_hit(float x, float y);
+/* the LOCK (0.3.5): a small box of its own just right of the toolbox, the
+ * padlock open (bare fingers wipe and cut, as before) or shut (only the
+ * tools do: tank_lock_tools). Shut is lit like a tool in hand - a white
+ * double edge on a lighter fill - and the shackle's shape says it too,
+ * never the hue alone. render_lock_hit is its tap test while a fish's card
+ * is up: its column, from the toolbox's top edge down to the bezel. */
+#define RENDER_LOCK_X (RENDER_TOOLS_X + RENDER_TOOLS_W + RENDER_CARD_HIT_SIDE)
+#define RENDER_LOCK_W 44
+#define RENDER_LOCK_H 44
+#define RENDER_LOCK_Y (RENDER_TOOLS_Y + (RENDER_TOOLS_H - RENDER_LOCK_H) / 2)
+bool render_lock_hit(float x, float y);
 /* With a tool in hand and no fish card up, a chip at the top left says so:
  * the tool and DONE. A tap on it (render_tool_chip_hit) puts the tool back
- * in the box. render_tool_chip draws nothing with TOOL_HAND, or when
- * fish_idx is a fish (its card shows the box instead). */
+ * in the box. render_tool_chip draws nothing with TOOL_HAND, when
+ * fish_idx is a fish (its card shows the box instead), or while a stroke is
+ * on the glass (0.3.5: the film under it shows as it is wiped). */
 void render_tool_chip(const tank_t *t, int fish_idx, uint16_t *fb, int stride);
 bool render_tool_chip_hit(const tank_t *t, float x, float y);
 
@@ -239,7 +251,15 @@ void render_milestones_leave(void);
  * to the milestones page, 2026-09-16),
  * SHOP_TAP_KEPT when a modal opened or closed. Page state is render-local;
  * render_shop_leave clears it when the page closes. */
-enum { SHOP_TAP_NONE = 0, SHOP_TAP_KEPT = 1, SHOP_TAP_CLOSE = 2, SHOP_TAP_BUY = 16, SHOP_TAP_MOVE = 32, SHOP_TAP_SELL = 64 };   /* BUY / MOVE / SELL + item index */
+enum { SHOP_TAP_NONE = 0, SHOP_TAP_KEPT = 1, SHOP_TAP_CLOSE = 2, SHOP_TAP_BUY = 16, SHOP_TAP_MOVE = 32, SHOP_TAP_SELL = 64,
+       SHOP_TAP_FRY = 128 };   /* BUY / MOVE / SELL + item index; FRY + the fry's place in the offer (0.3.5) */
+/* THE FRY (0.3.5, progression_fry_*): once a fish has been sold the shop's
+ * first row is FRY - the first fry still for sale at its left, the price,
+ * CHOOSE (SOLD OUT with all three bought, FULL with no slot). Its modal
+ * shows the three side by side, a bought one a blank; a tap picks one (lit:
+ * a white double edge), BUY returns SHOP_TAP_FRY + its place. Under them the
+ * price, why BUY is dim (no room, too few dollars) and when a fresh three
+ * comes. */
 /* SHOP_TAP_SELL (2026-09-24): an owned placeable piece's modal has SELL next
  * to MOVE; the first tap arms it ("+30 OK?"), the second returns SELL + item
  * and the platform calls progression_sell. Test SELL before MOVE before BUY. */
@@ -449,7 +469,12 @@ void render_fish_portrait(uint16_t *fb, int stride, float x, float y, float size
 #define SHP_TWO_X0  (SHP_MODAL_X + (SHP_MODAL_W - 2 * MSP_HOW_W - SHP_TWO_GAP) / 2)
 #define SHP_TWO_X1  (SHP_TWO_X0 + MSP_HOW_W + SHP_TWO_GAP)
 #define SHP_PER_PAGE 4
-#define SHP_PAGES    ((SD_ITEM_COUNT + SHP_PER_PAGE - 1) / SHP_PER_PAGE)
+#define SHP_PAGES    ((SD_ITEM_COUNT + SHP_PER_PAGE - 1) / SHP_PER_PAGE)   /* without the FRY row (render.c: shp_pages) */
+#define SHP_FRY_BOX_W  100            /* the fry modal's three boxes */
+#define SHP_FRY_BOX_H  84
+#define SHP_FRY_BOX_GAP 10
+#define SHP_FRY_BOX_X(k) (SHP_MODAL_X + (SHP_MODAL_W - 3 * SHP_FRY_BOX_W - 2 * SHP_FRY_BOX_GAP) / 2 + (k) * (SHP_FRY_BOX_W + SHP_FRY_BOX_GAP))
+#define SHP_FRY_BOX_Y  (SHP_MODAL_Y + 44)
 #define SHP_ARROW_W  36
 #define SHP_ARROW_H  32
 #define SHP_ARROW_Y  (SHP_COIN_Y + 16)

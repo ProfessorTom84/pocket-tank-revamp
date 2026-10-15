@@ -190,6 +190,7 @@ static void help(void) {
     ESP_LOGI(TAG, "STAGED TANKS (the real one is parked first): fresh (new tank, two fry) | stages (fry juv adult elder) | stage <fish|all> <fry|juv|adult|elder>");
     ESP_LOGI(TAG, "stash (park the real tank now) | restore (bring it back) | age <fish> <hours>");
     ESP_LOGI(TAG, "milestones [off] (the page, on cue; on the device: tap the open stats card)");
+    ESP_LOGI(TAG, "fry [open|roll|buy <0-2>] (the shop's fry: open = as if a fish was sold; roll = a fresh three now)");
     ESP_LOGI(TAG, "shop [off] (the sand dollar page) | dollars [n] (grant n; the balance and the chore counts) | buy plant|snail|castle|coral|cluster|shrimp|urchin (at the price) | place [plant|castle|coral] [x [behind|among|front]] (the piece's spot; no x = the page; the castle has no among) | coral <0-7|rrggbb> (its colour) | coral grow <g> (its growth, 1 = the fan, 1.25 = the crown) | cluster look <0-2> | cluster grow <g> (1 = full size, 2 = every tentacle) | sell plant|castle|coral|cluster (20%% back)");
     ESP_LOGI(TAG, "reset (the keeper's confirm prompt, as BOOT + tap opens it) | reset yes|no (answer it here) - YES WIPES EVERY SAVE, a parked tank too");
     ESP_LOGI(TAG, "setup [off] (the first-run flow: welcome, names, colours; off drops the panel - the birth flow too) | name <fish|idx> <newname> (up to %d letters, saved)", FISH_NAME_MAX);
@@ -337,6 +338,18 @@ static void run(tank_t *t, char *line) {
     } else if (!strcmp(c, "shop")) {                 /* the sand dollar page */
         bool on = argc < 2 || strcmp(argv[1], "off");
         touch_port_show_shop(on); ESP_LOGI(TAG, "shop page %s", on ? "up (CLOSE ends it)" : "closed");
+    } else if (!strcmp(c, "fry")) {                  /* fry [open|roll|buy <0-2>]: the shop's fry (0.3.5) */
+        if (argc > 1 && !strcmp(argv[1], "open")) progression_fry_open(t);
+        else if (argc > 1 && !strcmp(argv[1], "roll")) progression_fry_roll(t);
+        else if (argc > 2 && !strcmp(argv[1], "buy")) {
+            if (progression_buy_fry(t, atoi(argv[2]))) ESP_LOGI(TAG, "fry %d bought: the welcome opens", atoi(argv[2]));
+            else ESP_LOGW(TAG, "fry %d refused: not for sale, bought, no room (%d of %d fish), a welcome owed, or %d < %d",
+                          atoi(argv[2]), t->n_fish, POP_CAP, (int)t->sd_balance, SD_PRICE_FRY);
+        }
+        ESP_LOGI(TAG, "fry: %s | %d left, a fresh three in %.1f h | room %s | balance %d", progression_fry_for_sale(t) ? "FOR SALE" : "not yet (sell a fish, or `fry open`)",
+                 progression_fry_left(), progression_fry_new_in_s() / 3600, progression_fry_room(t) ? "yes" : "no", (int)t->sd_balance);
+        for (int k = 0; k < FRY_OFFER_N; k++) { fry_offer_t o; progression_fry_offer(k, &o);
+            ESP_LOGI(TAG, "  fry %d: body %06x markings %06x%s", k, (unsigned)o.body, (unsigned)o.accent, o.sold ? " - SOLD" : ""); }
     } else if (!strcmp(c, "dollars")) {              /* dollars [n]: grant n (negative takes), or just the balance */
         if (argc > 1) progression_sd_grant(t, atoi(argv[1]));
         ESP_LOGI(TAG, "sand dollars %d (earned %d) | colonies %d | %.0f cm trimmed", (int)t->sd_balance, (int)t->sd_earned,

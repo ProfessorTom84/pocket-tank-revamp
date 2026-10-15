@@ -248,7 +248,9 @@ enum {
     TMS_FIRST_TRIM = 1u << 9, TMS_FIRST_CLEANING = 1u << 10,
     TMS_FULL_SCHOOL = 1u << 11,                              /* the shrimp school reached SHRIMP_MAX (2026-09-30) */
     TMS_FIRST_REEF = 1u << 12,                               /* a fish went to look at the reef cluster (2026-10-02) */
-    TMS_COUNT = 13
+    /* 1u << 13 is 0.4's TMS_FIRST_MUTATION (main): never set on 0.3.x */
+    TMS_FIRST_SALE = 1u << 14,                               /* a fish sold: fry for sale in the shop (0.3.5) */
+    TMS_COUNT = 15
 };
 
 typedef struct {
@@ -432,6 +434,8 @@ typedef struct tank {
      * light, no placement page. */
     uint8_t  tool;
     float    tool_idle;            /* seconds since the tool last touched the glass */
+    bool     tools_locked;         /* the toolbox's LOCK (0.3.5, saved): bare fingers never wipe or
+                                    * cut - only a tool from the box does (tank_lock_tools) */
     /* upkeep state (persisted by progression.c) */
     float    veg_h[VEG_BEDS_MAX][VEG_FRONDS_MAX]; /* per-frond height, VEG_NUB..1 (fraction
                                                * of the way from the floor to the surface) */
@@ -625,6 +629,9 @@ void  tank_init(tank_t *t, uint32_t seed);
  * the tank is full. */
 void  tank_new_population(tank_t *t);
 int   tank_add_fish(tank_t *t, int parent_a, int parent_b);
+/* a fry from the shop (0.3.5): no parents, the offered look, in at the
+ * surface; the slot, or -1 with no room */
+int   tank_add_bought_fry(tank_t *t, uint32_t body, uint32_t accent);
 /* a fish leaves the tank (2026-10-01, the milestones card's SELL): the fish
  * after it move down a slot - the order stays the order of arrival, so the
  * last fish is still the youngest - and everything the tank keeps by slot
@@ -739,6 +746,16 @@ void  tank_touch_drag(tank_t *t, float x, float y);
 enum { TOOL_HAND = 0, TOOL_SPONGE, TOOL_SCISSORS };
 #define TOOL_IDLE_S 120.0f
 void  tank_set_tool(tank_t *t, int tool);
+/* the LOCK beside the toolbox (0.3.5, 2026-10-14, Strato: "people only want
+ * to be able to trim or clean algae when they are selected"): locked, a
+ * bare-finger stroke neither wipes nor cuts - the guessing stroke is off and
+ * only the SPONGE and the SCISSORS tend the glass. Taps, the drag-down feed
+ * and the hold are untouched. Unlocked (the default, and every older save)
+ * is the guessing stroke as before. Saved. */
+void  tank_lock_tools(tank_t *t, bool lock);
+/* a finger on the glass that has travelled like a stroke, not a press that
+ * may yet be a tap (WIPE_ENGAGE_PX): the DONE chip steps aside for it */
+bool  tank_stroking(const tank_t *t);
 void  tank_feed(tank_t *t, float x, int n);
 
 /* Diagnostic: episodes where a starving fish ignored available food >4s.
@@ -796,6 +813,7 @@ extern const uint32_t LOOK_BODY[LOOK_N];
 extern const uint32_t LOOK_ACCENT[LOOK_N];
 void  tank_set_name(tank_t *t, int slot, const char *name);
 void  tank_set_look(tank_t *t, int slot, uint32_t body, uint32_t accent);
+uint32_t tank_fin_for(uint32_t body);   /* the fin tank_set_look gives that body (the shop's fry previews) */
 /* the bubble column is the keeper's to place (first-run setup, 2026-09-13):
  * x is clamped clear of the grass corner (the fish's resting spot) and the glass (grass is fine), the
  * column's live bubbles shift with it, and everything that knows the column
