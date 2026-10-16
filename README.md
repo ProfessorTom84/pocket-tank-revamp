@@ -27,9 +27,11 @@ wall clear last explore time day  ->  seek_food urgency 8
 This repo is the complete project: the trained model, the distillation
 pipeline that made it, a PC simulator, and the firmware for a real board.
 Got the board? **[Install it from your browser](https://pocketank.com/install/)**,
-no toolchain needed.
+no toolchain needed. Come hang out with other keepers on the
+**[Pocket Tank Discord](https://pocketank.com/discord)**: show off your tank,
+get help, and share ideas for what comes next.
 
-The current release is **v0.3.4** (alpha); the settings page shows the one
+The current release is **v0.3.5** (alpha); the settings page shows the one
 on your tank. What changed in each release:
 **[pocketank.com/updates](https://pocketank.com/updates/)**.
 
