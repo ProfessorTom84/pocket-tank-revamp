@@ -387,6 +387,13 @@ float dish_stress(const dish_t *d, const cell_t *c, float *comfort) {
          + (ms > 0 ? ms * 0.5f : 0) + (d->uv_t > 0 ? 0.008f : 0);
 }
 
+/* the cells a hunter could eat: every other strain's, phages aside (last tick's census) */
+static int prey_count(const dish_t *d, int strain) {
+    int n = 0;
+    for (int s = 0; s < DISH_MAX_STRAINS; s++)
+        if (s != strain && d->strain[s].used && !SP[d->strain[s].species].virus) n += d->strain[s].count;
+    return n;
+}
 static void cell_tick(dish_t *d, int i, float dt) {
     cell_t *c = &d->cell[i];
     const sp_info_t *sp = &SP[c->species];
@@ -475,7 +482,9 @@ static void cell_tick(dish_t *d, int i, float dt) {
         if (c->div_t > 0) {
             c->div_t += dt * c->g.div_rate;
             if (c->div_t >= DIV_TIME) { divide(d, i); return; }
-        } else if (c->energy >= need && c->health > 0.5f && d->n_live < DISH_MAX_CELLS - 32)   /* ponytail: the last 32 slots are the phages' */ c->div_t = 0.001f;
+        } else if (c->energy >= need && c->health > 0.5f && d->n_live < DISH_MAX_CELLS - 32   /* ponytail: the last 32 slots are the phages' */
+                   && (sp->prey <= 0 || st->count * 3 < prey_count(d, c->strain)))           /* a hunter breeds only while prey outnumbers it 3 to 1 */
+            c->div_t = 0.001f;
     }
 
     /* ---- where to go ---- */
@@ -539,7 +548,7 @@ static void cell_tick(dish_t *d, int i, float dt) {
                         float pull = (dd - rr * 1.02f) * 4; px -= dx / dd * pull; py -= dy / dd * pull;
                     }
                     if (sp->prey > 0 && strat == ST_HUNT && o->strain != c->strain && dd < rr + 1 && o->state == CS_LIVE) {
-                        o->health -= sp->prey * dt; c->energy += sp->prey * 0.07f * dt;  /* myxo feeds on what it touches, while it hunts */
+                        o->health -= sp->prey * dt; c->energy += sp->prey * 2.0f * dt;   /* a few seconds of a meal fills a hunter, and a full one stops hunting */
                     }
                     if (sp->prey > 0 && o->strain != c->strain && dd2 < prey_d) { prey_d = dd2; prey = j; }
                 } else if (sp->virus && !o_virus && !c->host && o->state == CS_LIVE) {
