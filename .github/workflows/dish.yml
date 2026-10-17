@@ -1,0 +1,70 @@
+name: dish
+
+# Pocket Dish (the dish branch): the simulator's checks on all four glasses,
+# and the dish firmware built for all four boards. Build only - nothing is
+# signed with the project's key and nothing is published. The tank's own 1.8
+# image is built too: common/dish*.c are compiled into tankcore for every
+# image, so the tank must keep building beside the dish.
+
+on:
+  push:
+    branches: [dish]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sim:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: The dish's selftests, all four glasses
+        run: make -C sim dish-check-all
+
+  firmware:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0          # git describe wants the tags
+      - name: A throwaway signing key (these images are never installed)
+        run: |
+          mkdir -p firmware/keys
+          openssl genrsa -out firmware/keys/ota_signing_key.pem 3072 2> /dev/null
+      - name: The tank, the 1.8 (still builds beside the dish)
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.4.1
+          target: esp32s3
+          path: firmware
+      - name: The dish, the 1.8
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.4.1
+          target: esp32s3
+          path: firmware
+          command: idf.py -B build-dish -DSDKCONFIG=build-dish/sdkconfig "-DSDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.dish" build
+      - name: The dish, the round board (1.75C)
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.4.1
+          target: esp32s3
+          path: firmware
+          command: idf.py -B build-dish-round -DSDKCONFIG=build-dish-round/sdkconfig "-DSDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.round;sdkconfig.dish" build
+      - name: The dish, the watch (2.06)
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.4.1
+          target: esp32s3
+          path: firmware
+          command: idf.py -B build-dish-watch -DSDKCONFIG=build-dish-watch/sdkconfig "-DSDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.watch;sdkconfig.dish" build
+      - name: The dish, the square (2.16)
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.4.1
+          target: esp32s3
+          path: firmware
+          command: idf.py -B build-dish-square -DSDKCONFIG=build-dish-square/sdkconfig "-DSDKCONFIG_DEFAULTS=sdkconfig.defaults;sdkconfig.square;sdkconfig.dish" build
+      - name: What each image costs
+        run: for d in build build-dish build-dish-round build-dish-watch build-dish-square; do echo "== $d"; ls -l firmware/$d/*.bin 2>/dev/null | grep -v bootloader | head -3; done

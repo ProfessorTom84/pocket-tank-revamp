@@ -10,6 +10,19 @@
  * (DISH_W * DISH_H uint16) and copied each frame. NULL = rebuilt every frame. */
 void dish_render_set_scene(uint16_t *buf);
 void dish_render(const dish_t *d, uint16_t *fb, int stride);
+/* Rows y0..y1 only: two cores render the two halves of one frame (the result is the
+ * same pixels as dish_render). Each band must keep the same rows frame to frame. */
+void dish_render_band(const dish_t *d, uint16_t *fb, int stride, int y0, int y1);
+/* Optional background cache (DISH_W * DISH_H uint16, beside the scene): the scene
+ * plus the field glow, refreshed 4x a second instead of drawn every frame. */
+void dish_render_set_background(uint16_t *buf);
+
+/* Optional per-stage profiling (render.c's pattern): set a microsecond clock and
+ * dish_render adds each stage's time: 0 the scene, 1 the fields and food motes,
+ * 2 the cells, 3 the particles. Accumulates until the caller zeroes it. */
+#define DISH_PROF_N 4
+extern int64_t (*dish_render_clock_us)(void);
+extern int64_t dish_render_prof_us[DISH_PROF_N];
 
 /* The microscope lens: a magnified live view of the world around (wx, wy),
  * drawn in a circle of radius rad centred at screen (cx, cy). */

@@ -16,6 +16,15 @@ static float clampf01(float v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
 #define FCH ((float)DISH_H / FIELD_N)
 
 float dish_render_mood = 0.8f;
+int64_t (*dish_render_clock_us)(void);
+int64_t dish_render_prof_us[DISH_PROF_N];
+static int64_t prof_t;
+static void prof(int stage) {
+    if (!dish_render_clock_us) return;
+    int64_t t = dish_render_clock_us();
+    if (stage >= 0) dish_render_prof_us[stage] += t - prof_t;
+    prof_t = t;
+}
 
 /* ---- a view: world -> screen, with a clip ---- */
 typedef struct {
@@ -24,9 +33,10 @@ typedef struct {
     int x0, y0, x1, y1;                  /* clip rect, x1/y1 exclusive */
     bool circ; float ccx, ccy, cr2;      /* plus a clip circle (the lens) */
     float dim;                           /* the light off: everything dimmer */
+    bool fields_baked;                   /* the background already holds the field glow (only the motes are drawn) */
 } view_t;
 static view_t frame_view(uint16_t *fb, int stride) {
-    view_t v = { fb, stride, 1, 0, 0, 0, 0, 0, 0, DISH_W, DISH_H, false, 0, 0, 0, 1 };
+    view_t v = { fb, stride, 1, 0, 0, 0, 0, 0, 0, DISH_W, DISH_H, false, 0, 0, 0, 1, false };
     return v;
 }
 #define WX(v, x) (((x) - (v)->fx) * (v)->s + (v)->scx)
@@ -74,6 +84,8 @@ uint32_t dr_hsv(float h, float s, float v) {
 static void v_glow(const view_t *v, float x, float y, float r, uint32_t rgb, float k) {
     if (r < 0.6f) r = 0.6f;
     int xa = (int)floorf(x - r), xb = (int)ceilf(x + r), ya = (int)floorf(y - r), yb = (int)ceilf(y + r);
+    if (ya < v->y0) ya = v->y0; if (yb > v->y1 - 1) yb = v->y1 - 1;
+    if (xa < v->x0) xa = v->x0; if (xb > v->x1 - 1) xb = v->x1 - 1;
     float ir2 = 1.0f / (r * r);
     for (int yy = ya; yy <= yb; yy++)
         for (int xx = xa; xx <= xb; xx++) {
@@ -103,6 +115,8 @@ static void v_line(const view_t *v, float x0, float y0, float x1, float y1, floa
     float hw = w * 0.5f + 0.6f;
     int xa = (int)floorf(fminf(x0, x1) - hw), xb = (int)ceilf(fmaxf(x0, x1) + hw);
     int ya = (int)floorf(fminf(y0, y1) - hw), yb = (int)ceilf(fmaxf(y0, y1) + hw);
+    if (ya < v->y0) ya = v->y0; if (yb > v->y1 - 1) yb = v->y1 - 1;
+    if (xa < v->x0) xa = v->x0; if (xb > v->x1 - 1) xb = v->x1 - 1;
     float vx = x1 - x0, vy = y1 - y0, l2 = vx * vx + vy * vy + 1e-6f;
     for (int yy = ya; yy <= yb; yy++)
         for (int xx = xa; xx <= xb; xx++) {
@@ -116,7 +130,7 @@ static void v_line(const view_t *v, float x0, float y0, float x1, float y1, floa
 }
 
 /* ---- the cell shader: one LUT over t^2 = d^2 / r^2 ---- */
-#define LUT_N 384                         /* t^2 in [0, 6) at 64 steps per unit */
+#define LUT_N 256                         /* t^2 in [0, 4) at 64 steps per unit: out to t = 2 */
 static float L_FILL[LUT_N], L_RIM[LUT_N], L_HALO[LUT_N];
 static bool g_lut;
 static void lut_build(void) {
@@ -125,7 +139,7 @@ static void lut_build(void) {
         float inside = t < 0.92f ? 1 : t > 1.04f ? 0 : (1.04f - t) / 0.12f;
         L_FILL[i] = (0.22f + 0.30f * t * t) * inside;
         L_RIM[i] = expf(-((t - 0.95f) / 0.13f) * ((t - 0.95f) / 0.13f));
-        L_HALO[i] = t < 0.9f ? 0 : 0.5f * expf(-(t - 0.9f) * 2.4f) * (t > 2.2f ? fmaxf(0, (2.45f - t) / 0.25f) : 1);
+        L_HALO[i] = t < 0.9f ? 0 : 0.5f * expf(-(t - 0.9f) * 2.4f) * (t > 1.7f ? fmaxf(0, (2.0f - t) / 0.3f) : 1);
     }
     g_lut = true;
 }
@@ -134,7 +148,7 @@ typedef struct { uint32_t body, rim, halo; float kf, kr, kh; } shade_t;
 static void v_cell(const view_t *v, const seg_t *sg, int n, float r, const shade_t *sh) {
     if (!g_lut) lut_build();
     if (r < 0.8f) r = 0.8f;
-    float ext = r * 2.45f;
+    float ext = r * 2.0f;
     float xa = 1e9f, xb = -1e9f, ya = 1e9f, yb = -1e9f;
     for (int k = 0; k < n; k++) {
         xa = fminf(xa, fminf(sg[k].ax, sg[k].bx)); xb = fmaxf(xb, fmaxf(sg[k].ax, sg[k].bx));
@@ -166,8 +180,12 @@ static void v_cell(const view_t *v, const seg_t *sg, int n, float r, const shade
 }
 
 /* ---- the scene: the agar, the glass, the lamp (baked) ---- */
-static uint16_t *g_scene; static int g_scene_light = -1;
-void dish_render_set_scene(uint16_t *buf) { g_scene = buf; g_scene_light = -1; }
+static uint16_t *g_scene, *g_bg;
+/* each band keeps its own keys, so two cores never rebuild the same rows (a band is named by its first row) */
+#define BAND_SLOTS 4
+static int g_scene_key[BAND_SLOTS] = { -1, -1, -1, -1 }, g_bg_key[BAND_SLOTS] = { -1, -1, -1, -1 };
+void dish_render_set_scene(uint16_t *buf) { g_scene = buf; for (int k = 0; k < BAND_SLOTS; k++) g_scene_key[k] = g_bg_key[k] = -1; }
+void dish_render_set_background(uint16_t *buf) { g_bg = buf; for (int k = 0; k < BAND_SLOTS; k++) g_bg_key[k] = -1; }
 static const uint8_t BAYER4[16] = { 0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5 };
 static inline uint16_t pack_dither(float r, float g, float b, int x, int y) {
     float dth = (BAYER4[(y & 3) * 4 + (x & 3)] + 0.5f) / 16.0f;
@@ -177,11 +195,11 @@ static inline uint16_t pack_dither(float r, float g, float b, int x, int y) {
     return (uint16_t)((ri << 11) | (gi << 5) | bi);
 }
 static uint32_t hash2(int x, int y) { uint32_t h = (uint32_t)x * 374761393u + (uint32_t)y * 668265263u; h = (h ^ (h >> 13)) * 1274126177u; return h ^ (h >> 16); }
-static void scene_build(uint16_t *out, int stride, bool light, float ph, float salt) {
+static void scene_build(uint16_t *out, int stride, bool light, float ph, float salt, int ya, int yb) {
     float dim = light ? 1.0f : 0.45f;
     float R = (DISH_RX + DISH_RY) * 0.5f;
     const float lx = -0.7071f, ly = -0.7071f;     /* the lamp: upper left */
-    for (int y = 0; y < DISH_H; y++)
+    for (int y = ya; y < yb; y++)
         for (int x = 0; x < DISH_W; x++) {
             float u = (x + 0.5f - DISH_CX) / DISH_RX, v = (y + 0.5f - DISH_CY) / DISH_RY;
             float q = sqrtf(u * u + v * v), dist = (1 - q) * R;        /* px inside the agar's edge (negative: in the glass) */
@@ -222,17 +240,24 @@ static void field_rgb(const dish_t *d, int c, float *r, float *g, float *b) {
     *g = n * 26 + w * 24 + m * 40;
     *b = n * 6 + w * 4 + m * 52;
 }
+static void draw_motes(const view_t *v, const dish_t *d);
+static void draw_fields_glow(const view_t *v, const dish_t *d);
 static void draw_fields(const view_t *v, const dish_t *d) {
+    if (!v->fields_baked) draw_fields_glow(v, d);
+    draw_motes(v, d);
+}
+static void draw_fields_glow(const view_t *v, const dish_t *d) {
     if (v->s == 1 && !v->circ) {                     /* the frame: bilinear quads between field centres */
         for (int j = 0; j + 1 < FIELD_N; j++)
             for (int i = 0; i + 1 < FIELD_N; i++) {
+                if ((int)((j + 1.5f) * FCH) <= v->y0 || (int)((j + 0.5f) * FCH) >= v->y1) continue;   /* not this band's rows */
                 float c[4][3];
                 int id[4] = { j * FIELD_N + i, j * FIELD_N + i + 1, (j + 1) * FIELD_N + i, (j + 1) * FIELD_N + i + 1 };
                 float mx = 0;
                 for (int k = 0; k < 4; k++) { field_rgb(d, id[k], &c[k][0], &c[k][1], &c[k][2]); mx = fmaxf(mx, c[k][0] + c[k][1] + c[k][2]); }
                 if (mx < 1.5f) continue;
                 int xa = (int)((i + 0.5f) * FCW), xb = (int)((i + 1.5f) * FCW), ya = (int)((j + 0.5f) * FCH), yb = (int)((j + 1.5f) * FCH);
-                for (int y = ya; y < yb; y++) {
+                for (int y = ya > v->y0 ? ya : v->y0; y < yb && y < v->y1; y++) {
                     float b = (y - ya) / (float)(yb - ya);
                     for (int x = xa; x < xb; x++) {
                         float a = (x - xa) / (float)(xb - xa);
@@ -252,7 +277,9 @@ static void draw_fields(const view_t *v, const dish_t *d) {
                 px_add(v, x, y, (int)((n * 46 + w * 26 + m * 6) * v->dim), (int)((n * 26 + w * 24 + m * 40) * v->dim), (int)((n * 6 + w * 4 + m * 52) * v->dim));
             }
     }
-    /* food motes: specks of nutrient that twinkle where the food is rich */
+}
+/* food motes: specks of nutrient that twinkle where the food is rich */
+static void draw_motes(const view_t *v, const dish_t *d) {
     for (int c = 0; c < FIELD_N * FIELD_N; c++) {
         float n = d->nutr[c];
         if (n < 0.16f) continue;                     /* the bare agar has no motes: they mark food worth swimming to */
@@ -344,8 +371,8 @@ static void draw_phage(const view_t *v, const cell_t *c, float clock) {
         }
 }
 
-static void draw_cell(const view_t *v, const dish_t *d, const cell_t *c) {
-    if (c->species == SP_PHAGE) { draw_phage(v, c, d->clock); return; }
+static void draw_cell(const view_t *v, float clock, const cell_t *c) {
+    if (c->species == SP_PHAGE) { draw_phage(v, c, clock); return; }
     float s = v->s, x = WX(v, c->x), y = WY(v, c->y);
     float r = dish_cell_radius(c) * s * (1 + 0.22f * fminf(1, c->infect)) * (1 + 0.03f * sinf(c->phase * 0.7f));
     float fade = 1;
@@ -401,14 +428,13 @@ static void draw_cell(const view_t *v, const dish_t *d, const cell_t *c) {
     }
     /* the flagellum: a travelling wave off the back of the swimmers */
     if (!spore && (c->species == SP_BACILLUS) && c->state != CS_DYING) {
-        float L = r * 1.35f, bx = x - dx * L, by = y - dy * L, lx = bx, ly = by;
+        float L = r * 1.35f, bx = x - dx * L, by = y - dy * L;
         float len = r * 4.2f, amp = r * 0.55f;
         uint32_t fc = dr_hsv(shown_hue(&c->g), 0.3f, 1);
-        for (int k = 1; k <= 14; k++) {
-            float t = k / 14.0f, along = len * t, w = sinf(t * 9 - c->phase * 5) * amp * t;
-            float nx = bx - dx * along + px * w, ny = by - dy * along + py * w;
-            v_line(v, lx, ly, nx, ny, fmaxf(0.7f, r * 0.16f), fc, 0.55f * (1 - t * 0.7f) * fade, 0);
-            lx = nx; ly = ny;
+        int beads = r > 8 ? 22 : 11;                     /* (the lens wants a smooth whip; the dish, a few beads) */
+        for (int k = 1; k <= beads; k++) {
+            float t = k / (float)beads, along = len * t, w = sinf(t * 9 - c->phase * 5) * amp * t;
+            v_glow(v, bx - dx * along + px * w, by - dy * along + py * w, fmaxf(1.1f, r * 0.24f), fc, 0.7f * (1 - t * 0.7f) * fade);
         }
     }
     v_cell(v, sg, n, r, &sh);
@@ -422,7 +448,7 @@ static void draw_cell(const view_t *v, const dish_t *d, const cell_t *c) {
     if (c->g.drug_res > 0.35f && !spore) {
         int k = 4 + (int)(c->g.drug_res * 6);
         for (int m = 0; m < k; m++) {
-            float a = m * TAU / k + d->clock * 0.6f;
+            float a = m * TAU / k + clock * 0.6f;
             v_glow(v, x + cosf(a) * r * 1.25f, y + sinf(a) * r * 1.25f, fmaxf(0.9f, r * 0.22f), 0xFFE08A, 0.25f + c->g.drug_res * 0.5f);
         }
     }
@@ -442,7 +468,7 @@ static void draw_cell(const view_t *v, const dish_t *d, const cell_t *c) {
         int k = 1 + (int)(c->infect * 6);
         for (int m = 0; m < k; m++) {
             uint32_t h = hash2((int)(c->x * 7) + m, m * 13);
-            float a = (h & 1023) / 1023.0f * TAU + d->clock * 2, rr = r * 0.6f * ((h >> 10) & 255) / 255.0f;
+            float a = (h & 1023) / 1023.0f * TAU + clock * 2, rr = r * 0.6f * ((h >> 10) & 255) / 255.0f;
             v_glow(v, x + cosf(a) * rr, y + sinf(a) * rr, fmaxf(1, r * 0.22f), 0xC07CFF, 0.8f);
         }
     }
@@ -479,7 +505,9 @@ static void draw_parts(const view_t *v, const dish_t *d) {
 }
 
 static void draw_world(const view_t *v, const dish_t *d) {
+    prof(-1);
     draw_fields(v, d);
+    prof(1);
     if (d->warm > 0.02f) v_glow(v, WX(v, d->warm_x), WY(v, d->warm_y), 46 * v->s, 0xFF5A1E, d->warm * 0.9f);
     /* spores and the dying under, the living over, the phages on top */
     for (int pass = 0; pass < 3; pass++)
@@ -490,20 +518,37 @@ static void draw_world(const view_t *v, const dish_t *d) {
             if (want != pass) continue;
             float r = dish_cell_radius(c) * 3 * v->s, x = WX(v, c->x), y = WY(v, c->y);
             if (x + r < v->x0 || x - r >= v->x1 || y + r < v->y0 || y - r >= v->y1) continue;
-            draw_cell(v, d, c);
+            draw_cell(v, d->clock, c);
         }
+    prof(2);
     draw_parts(v, d);
+    prof(3);
 }
 
-void dish_render(const dish_t *d, uint16_t *fb, int stride) {
-    static uint16_t *own;
+void dish_render(const dish_t *d, uint16_t *fb, int stride) { dish_render_band(d, fb, stride, 0, DISH_H); }
+void dish_render_band(const dish_t *d, uint16_t *fb, int stride, int y0, int y1) {
+    prof(-1);
+    int slot = y0 * BAND_SLOTS / DISH_H;
     /* the scene is rebuilt only when what it shows changes: the light, the pH or the salt (in steps) */
     int light = (d->light ? 1 : 0) | (int)(d->ph * 20 + 0.5f) << 1 | (int)(d->salt * 20 + 0.5f) << 6;
+    view_t bv = frame_view(g_bg, DISH_W);
+    bv.y0 = y0; bv.y1 = y1; bv.dim = d->light ? 1.0f : 0.55f;
     if (g_scene) {
-        if (g_scene_light != light) { scene_build(g_scene, DISH_W, d->light, d->ph, d->salt); g_scene_light = light; }
-        for (int y = 0; y < DISH_H; y++) memcpy(&fb[y * stride], &g_scene[y * DISH_W], DISH_W * 2);
-    } else { (void)own; scene_build(fb, stride, d->light, d->ph, d->salt); }
+        if (g_scene_key[slot] != light) { scene_build(g_scene, DISH_W, d->light, d->ph, d->salt, y0, y1); g_scene_key[slot] = light; g_bg_key[slot] = -1; }
+        /* the background: the scene plus the field glow, rebuilt four times a second (the fields drift slowly) */
+        int bk = (int)(d->clock * 4);
+        if (g_bg && g_bg_key[slot] != bk) {
+            for (int y = y0; y < y1; y++) memcpy(&g_bg[y * DISH_W], &g_scene[y * DISH_W], DISH_W * 2);
+            draw_fields_glow(&bv, d);
+            g_bg_key[slot] = bk;
+        }
+        const uint16_t *src = g_bg ? g_bg : g_scene;
+        for (int y = y0; y < y1; y++) memcpy(&fb[y * stride], &src[y * DISH_W], DISH_W * 2);
+    } else scene_build(fb, stride, d->light, d->ph, d->salt, y0, y1);
+    prof(0);
     view_t v = frame_view(fb, stride);
+    v.y0 = y0; v.y1 = y1;
+    v.fields_baked = g_scene && g_bg;
     v.dim = d->light ? 1.0f : 0.55f;
     /* the lamp's glints wander a little round the rim */
     for (int k = 0; k < 3; k++) {
@@ -568,16 +613,14 @@ void dr_ring(uint16_t *fb, int stride, float x, float y, float r, float w, uint3
 void dr_line(uint16_t *fb, int stride, float x0, float y0, float x1, float y1, float w, uint32_t rgb, int a) { view_t v = frame_view(fb, stride); v_line(&v, x0, y0, x1, y1, w, rgb, 0, a); }
 
 void dr_cell_icon(uint16_t *fb, int stride, species_t sp, const genome_t *g, float x, float y, float s, float ang, float clock, bool face, float clip_r) {
-    static dish_t tmp;                                  /* a one-cell world, drawn through the same shader */
-    cell_t *c = &tmp.cell[0];
+    cell_t one, *c = &one;                              /* one cell, drawn through the same shader */
     memset(c, 0, sizeof *c);
     c->state = CS_LIVE; c->species = (uint8_t)sp; c->strain = face ? DISH_PET : 1; c->g = *g;
     c->x = 0; c->y = 0; c->ang = ang; c->phase = clock * 4; c->health = 1;
-    tmp.clock = clock;
     view_t v = frame_view(fb, stride);
     v.s = s; v.scx = x; v.scy = y;
     if (clip_r > 0) { v.circ = true; v.ccx = x; v.ccy = y; v.cr2 = clip_r * clip_r; }
-    draw_cell(&v, &tmp, c);
+    draw_cell(&v, clock, c);
 }
 
 /* ---- the 5x7 pixel font (the tank's, render.c), drawn with a soft glow ---- */

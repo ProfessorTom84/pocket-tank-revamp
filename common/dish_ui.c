@@ -2,6 +2,7 @@
 #include "dish_ui.h"
 #include "dish_render.h"
 #include "dish_prog.h"
+#include "sounds.h"
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -91,9 +92,23 @@ static void lens_geom(const dish_t *d, int cell, float *cx, float *cy, float *r)
 void dish_ui_init(dish_ui_t *u) {
     memset(u, 0, sizeof *u);
     for (int i = 0; i < NEED_COUNT; i++) u->needs[i] = 0.8f;
-    u->mood = 0.8f; u->lens = -1; u->lens_zoom = 5; u->sel = -1;
+    u->mood = 0.8f; u->lens = -1; u->lens_zoom = 5; u->sel = -1; u->prev_lens = -1;
 }
-void dish_ui_begin_setup(dish_ui_t *u) { u->setup = 1; u->page = PAGE_NONE; u->lens = -1; u->tool = TOOL_NONE; }
+static void sfx(dish_ui_t *u, int cue, int pitch, float cd);
+void dish_ui_begin_setup(dish_ui_t *u) { u->setup = 1; u->page = PAGE_NONE; u->lens = -1; u->tool = TOOL_NONE; sfx(u, SND_WELCOME, 256, 0); }
+/* a sound for the platform; cd > 0: not again for that long (a busy dish must not chatter) */
+static void sfx(dish_ui_t *u, int cue, int pitch, float cd) {
+    if (cue < 0 || cue >= 32 || u->snd_cd[cue] > 0 || u->snd_n >= 8) return;
+    u->snd_cd[cue] = cd;
+    u->snd_q[u->snd_n] = cue; u->snd_pitch[u->snd_n] = pitch; u->snd_n++;
+}
+int dish_ui_take_sound(dish_ui_t *u, int *pitch) {
+    if (!u->snd_n) return -1;
+    int cue = u->snd_q[0]; *pitch = u->snd_pitch[0];
+    for (int k = 1; k < u->snd_n; k++) { u->snd_q[k - 1] = u->snd_q[k]; u->snd_pitch[k - 1] = u->snd_pitch[k]; }
+    u->snd_n--;
+    return cue;
+}
 void dish_ui_toast(dish_ui_t *u, const char *s, float seconds) {
     snprintf(u->toast, sizeof u->toast, "%s", s);
     u->toast_t = seconds;
@@ -101,6 +116,18 @@ void dish_ui_toast(dish_ui_t *u, const char *s, float seconds) {
 void dish_ui_event(dish_ui_t *u, const dish_t *d, int ev, int strain) {
     const strain_t *pet = &d->strain[DISH_PET];
     char b[40];
+    bool pet_ev = strain == DISH_PET;
+    switch (ev) {   /* the sound first: the bank's cues at the dish's pitches */
+    case DEV_FEED:     sfx(u, SND_FEED, 256, 0.15f); break;
+    case DEV_DIVIDE:   if (pet_ev) sfx(u, SND_BUBBLES, 340, 0.7f); break;
+    case DEV_POP:      if (pet_ev) sfx(u, SND_TAP, 170, 0.35f); break;
+    case DEV_BURST:    sfx(u, SND_SPOOK, 300, 0.6f); break;
+    case DEV_INFECT:   if (pet_ev) sfx(u, SND_ERROR, 200, 2); break;
+    case DEV_EXTINCT:  sfx(u, SND_SLEEP, 256, 0); break;
+    case DEV_RESPAWN:  sfx(u, SND_ARRIVAL, 256, 0); break;
+    case DEV_OUTBREAK: sfx(u, SND_SPOOK, 200, 0); break;
+    case DEV_BADGE:    sfx(u, SND_MILESTONE, 256, 0); break;
+    }
     switch (ev) {
     case DEV_EXTINCT: u->extinct_show = 1; u->lens = -1; u->page = PAGE_NONE; break;
     case DEV_RESPAWN: u->extinct_show = 0; u->back_show = 3.5f; snprintf(b, sizeof b, "%s IS BACK!", pet->name); dish_ui_toast(u, b, 3.5f); break;
@@ -139,6 +166,12 @@ static icon_t icon_for_need(int n) {
 
 void dish_ui_tick(dish_ui_t *u, dish_t *d, float dt) {
     u->clock += dt;
+    for (int k = 0; k < 32; k++) if (u->snd_cd[k] > 0) u->snd_cd[k] -= dt;
+    if ((int)u->page != u->prev_page) {              /* a page opening, flipping or closing */
+        sfx(u, u->page == PAGE_NONE ? SND_CARD_CLOSE : SND_CARD_OPEN, 256, 0);
+        u->prev_page = u->page;
+    }
+    if ((u->lens >= 0) != (u->prev_lens >= 0)) { if (u->lens >= 0) sfx(u, SND_INVESTIGATE, 256, 0); u->prev_lens = u->lens; }
     const strain_t *pet = &d->strain[DISH_PET];
     if (pet->count > 0) {
         float t[NEED_COUNT]; need_targets(d, t);
@@ -209,7 +242,7 @@ static void icon_press(dish_ui_t *u, dish_t *d, int i) {
         break; }
     case ICON_LAB:   u->page = PAGE_LAB; break;
     case ICON_MEDS:  u->page = PAGE_MEDS; break;
-    case ICON_CLEAN: u->tool = u->tool == TOOL_WIPE ? TOOL_NONE : TOOL_WIPE; u->tool_idle = 0; break;
+    case ICON_CLEAN: u->tool = u->tool == TOOL_WIPE ? TOOL_NONE : TOOL_WIPE; u->tool_idle = 0; sfx(u, SND_TAP, 256, 0); break;
     case ICON_ZOOM:
         if (u->lens >= 0) u->lens = -1;
         else open_lens(u, d, pet_cell_near(d, pet->cx, pet->cy));
@@ -221,23 +254,24 @@ static void icon_press(dish_ui_t *u, dish_t *d, int i) {
 static bool gate(dish_ui_t *u, dish_t *d, int unl) {
     if (dish_has(d, unl)) return true;
     char b[40];
-    if (dish_prog_unlock(d, unl)) snprintf(b, sizeof b, "%s UNLOCKED!", UNL_NAMES[unl]);
-    else snprintf(b, sizeof b, "%s COSTS %d DNA", UNL_NAMES[unl], UNL_COST[unl]);
+    if (dish_prog_unlock(d, unl)) { snprintf(b, sizeof b, "%s UNLOCKED!", UNL_NAMES[unl]); sfx(u, SND_STAGE_UP, 256, 0); }
+    else { snprintf(b, sizeof b, "%s COSTS %d DNA", UNL_NAMES[unl], UNL_COST[unl]); sfx(u, SND_ERROR, 256, 0.3f); }
     dish_ui_toast(u, b, 3);
     return false;
 }
 static void setup_tap(dish_ui_t *u, dish_t *d, float x, float y) {
     bool next = in_rect(page_done(), x, y);
+    if (next) sfx(u, u->setup == 4 ? SND_CONFIRM : SND_TAP, 256, 0);
     switch (u->setup) {
     case 1: if (next) u->setup = 2; break;
     case 2:
-        for (int k = 0; k < 3; k++) if (in_rect(starter_tile(k), x, y)) u->starter = k;
+        for (int k = 0; k < 3; k++) if (in_rect(starter_tile(k), x, y)) { u->starter = k; sfx(u, SND_TAP, 256 + k * 40, 0); }
         if (next) u->setup = 3;
         break;
     case 3:
-        if (in_rect(name_prev(), x, y)) u->name_i = (u->name_i + N_NAMES - 1) % N_NAMES;
-        else if (in_rect(name_next(), x, y)) u->name_i = (u->name_i + 1) % N_NAMES;
-        else if (in_rect(name_box(), x, y)) u->name_i = (u->name_i + 7 + (int)(u->clock * 13) % (N_NAMES - 1)) % N_NAMES;
+        if (in_rect(name_prev(), x, y)) { u->name_i = (u->name_i + N_NAMES - 1) % N_NAMES; sfx(u, SND_WHEEL_TICK, 256, 0); }
+        else if (in_rect(name_next(), x, y)) { u->name_i = (u->name_i + 1) % N_NAMES; sfx(u, SND_WHEEL_TICK, 256, 0); }
+        else if (in_rect(name_box(), x, y)) { u->name_i = (u->name_i + 7 + (int)(u->clock * 13) % (N_NAMES - 1)) % N_NAMES; sfx(u, SND_WHEEL_TICK, 320, 0); }
         else if (next) u->setup = 4;
         break;
     case 4:
@@ -265,20 +299,22 @@ static void page_tap(dish_ui_t *u, dish_t *d, float x, float y) {
         if (in_rect(page_done(), x, y)) { if (u->page == PAGE_BADGES) d->badges_new = 0; u->page = PAGE_CARD; }
         break; }
     case PAGE_LAB:
+        if (in_rect(lab_minus(), x, y) || in_rect(lab_plus(), x, y) || in_rect(dial_minus(1), x, y) || in_rect(dial_plus(1), x, y)
+            || in_rect(dial_minus(2), x, y) || in_rect(dial_plus(2), x, y)) sfx(u, SND_WHEEL_TICK, 256, 0);   /* a dial's click */
         if (in_rect(lab_minus(), x, y)) d->temp = clampf(d->temp - 0.05f, 0.05f, 0.95f);
         else if (in_rect(lab_plus(), x, y)) d->temp = clampf(d->temp + 0.05f, 0.05f, 0.95f);
         else if (in_rect(dial_minus(1), x, y)) { if (gate(u, d, UNL_PH)) d->ph = clampf(d->ph - 0.05f, 0, 1); }
         else if (in_rect(dial_plus(1), x, y)) { if (gate(u, d, UNL_PH)) d->ph = clampf(d->ph + 0.05f, 0, 1); }
         else if (in_rect(dial_minus(2), x, y)) { if (gate(u, d, UNL_SALT)) d->salt = clampf(d->salt - 0.05f, 0, 1); }
         else if (in_rect(dial_plus(2), x, y)) { if (gate(u, d, UNL_SALT)) d->salt = clampf(d->salt + 0.05f, 0, 1); }
-        else if (in_rect(lab_light(), x, y)) d->light = !d->light;
-        else if (in_rect(lab_btn(1), x, y)) { if (gate(u, d, UNL_UV)) { dish_uv(d, 10); u->page = PAGE_NONE; dish_ui_toast(u, "UV ON: WATCH THEM CHANGE!", 3); } }
+        else if (in_rect(lab_light(), x, y)) { d->light = !d->light; sfx(u, d->light ? SND_LIGHT_ON : SND_LIGHT_OFF, 256, 0); }
+        else if (in_rect(lab_btn(1), x, y)) { if (gate(u, d, UNL_UV)) { dish_uv(d, 10); u->page = PAGE_NONE; dish_ui_toast(u, "UV ON: WATCH THEM CHANGE!", 3); sfx(u, SND_LIGHT_ON, 150, 0); } }
         else if (in_rect(lab_btn(2), x, y)) u->page = PAGE_SAMPLES;
         else if (in_rect(page_done(), x, y)) u->page = PAGE_NONE;
         break;
     case PAGE_MEDS:
-        if (in_rect(meds_drug(), x, y)) { if (!gate(u, d, UNL_DRUG)) return; u->page = PAGE_NONE; u->tool = TOOL_DRUG; u->tool_idle = 0; dish_ui_toast(u, "CAREFUL: IT KILLS GOOD GERMS TOO", 3.5f); }
-        else if (in_rect(meds_virus(), x, y)) { u->page = PAGE_NONE; dish_antiviral(d); dish_ui_toast(u, "THE VIRUSES ARE GONE", 3); }
+        if (in_rect(meds_drug(), x, y)) { if (!gate(u, d, UNL_DRUG)) return; u->page = PAGE_NONE; u->tool = TOOL_DRUG; u->tool_idle = 0; sfx(u, SND_CONFIRM, 256, 0); dish_ui_toast(u, "CAREFUL: IT KILLS GOOD GERMS TOO", 3.5f); }
+        else if (in_rect(meds_virus(), x, y)) { u->page = PAGE_NONE; dish_antiviral(d); sfx(u, SND_CONFIRM, 300, 0); dish_ui_toast(u, "THE VIRUSES ARE GONE", 3); }
         else if (in_rect(page_done(), x, y)) u->page = PAGE_NONE;
         break;
     case PAGE_SAMPLES:
@@ -287,7 +323,7 @@ static void page_tap(dish_ui_t *u, dish_t *d, float x, float y) {
                 if (!gate(u, d, dish_unl_for_species(SAMPLES[k]))) return;
                 int s = dish_add_sample(d, SAMPLES[k]);
                 char b[40];
-                if (s >= 0) { snprintf(b, sizeof b, "%s JOINED THE DISH", SPECIES_NAMES[SAMPLES[k]]); u->page = PAGE_NONE; }
+                if (s >= 0) { snprintf(b, sizeof b, "%s JOINED THE DISH", SPECIES_NAMES[SAMPLES[k]]); u->page = PAGE_NONE; sfx(u, SND_ARRIVAL, 320, 0); }
                 else snprintf(b, sizeof b, "NO ROOM FOR %s", SPECIES_NAMES[SAMPLES[k]]);
                 dish_ui_toast(u, b, 3);
                 return;
@@ -310,13 +346,13 @@ static void tap(dish_ui_t *u, dish_t *d, float x, float y) {
     if (!dish_inside(x, y, 4)) return;
     u->tool_idle = 0;
     switch (u->tool) {
-    case TOOL_DRUG: dish_dose(d, x, y, 0.7f); return;
+    case TOOL_DRUG: dish_dose(d, x, y, 0.7f); sfx(u, SND_FEED, 180, 0.15f); return;
     case TOOL_WIPE: dish_wipe(d, x, y, 24); return;
     default: break;
     }
     /* three quick raps on the glass scatter everyone */
     u->tap_t[2] = u->tap_t[1]; u->tap_t[1] = u->tap_t[0]; u->tap_t[0] = 0;
-    if (u->tap_t[2] < 0.8f) { dish_rap(d, x, y); dish_ui_toast(u, "EEK!", 1.5f); u->tap_t[1] = u->tap_t[2] = 9; return; }
+    if (u->tap_t[2] < 0.8f) { dish_rap(d, x, y); sfx(u, SND_SPOOK, 256, 0); dish_ui_toast(u, "EEK!", 1.5f); u->tap_t[1] = u->tap_t[2] = 9; return; }
     int c = dish_cell_at(d, x, y, 5);
     if (c >= 0) { open_lens(u, d, c); return; }
     dish_feed(d, x, y, 0.6f);
@@ -330,7 +366,7 @@ void dish_ui_touch(dish_ui_t *u, dish_t *d, float x, float y, bool down) {
     if (down) {
         if (hypot2(x - u->dx0, y - u->dy0) > 10) u->dragged = true;
         if (u->dragged && u->page == PAGE_NONE && !u->setup && icon_hit(u->dx0, u->dy0) < 0) {
-            if (u->tool == TOOL_WIPE) { dish_wipe(d, x, y, 22); u->tool_idle = 0; }
+            if (u->tool == TOOL_WIPE) { dish_wipe(d, x, y, 22); u->tool_idle = 0; sfx(u, SND_WIPE, 256, 0.45f); }
             else if (u->tool == TOOL_NONE) dish_stir(d, x, y, x - u->lx, y - u->ly);
         }
         u->lx = x; u->ly = y;

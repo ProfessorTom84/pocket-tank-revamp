@@ -68,8 +68,9 @@ static void field_mask(void) {
             g_in[j * FIELD_N + i] = dish_inside((i + 0.5f) * FCW, (j + 0.5f) * FCH, -FCW * 0.5f);
 }
 /* one explicit diffusion step among the inside cells; the glass reflects */
+static float g_tmp[FIELD_N * FIELD_N];   /* diffuse's and advect's scratch (one: they never overlap) */
 static void diffuse(float *f, float k) {
-    static float tmp[FIELD_N * FIELD_N];
+    float *tmp = g_tmp;
     if (k <= 0) return;
     if (k > 0.24f) k = 0.24f;
     for (int j = 0; j < FIELD_N; j++)
@@ -81,18 +82,18 @@ static void diffuse(float *f, float k) {
             for (int q = 0; q < 4; q++) s += g_in[nb[q]] ? f[nb[q]] : v;
             tmp[c] = v + k * (s - 4 * v);
         }
-    memcpy(f, tmp, sizeof tmp);
+    memcpy(f, tmp, sizeof g_tmp);
 }
 /* the stir current carries what is dissolved (semi-Lagrangian) */
 static void advect(const dish_t *d, float *f, float dt) {
-    static float tmp[FIELD_N * FIELD_N];
+    float *tmp = g_tmp;
     for (int j = 0; j < FIELD_N; j++)
         for (int i = 0; i < FIELD_N; i++) {
             int c = j * FIELD_N + i;
             float x = (i + 0.5f) * FCW - d->flowx[c] * dt, y = (j + 0.5f) * FCH - d->flowy[c] * dt;
             tmp[c] = g_in[c] ? dish_field(f, x, y) : 0;
         }
-    memcpy(f, tmp, sizeof tmp);
+    memcpy(f, tmp, sizeof g_tmp);
 }
 static void splat(float *f, float x, float y, float amount, float rad_px, float cap) {
     for (int j = 0; j < FIELD_N; j++)
@@ -760,9 +761,15 @@ bool dish_load(dish_t *d, const uint8_t *in, size_t len, uint32_t seed) {
     uint32_t magic; uint16_t ver;
     r_bytes(&r, &magic, 4); r_bytes(&r, &ver, 2);
     if (!r.ok || magic != SAVE_MAGIC || ver < 2) return false;
-    /* load beside, so a bad save leaves the dish alone.
-     * ponytail: a second dish_t (~45 KB) in .bss; on the device mark it EXT_RAM_BSS_ATTR (PSRAM) */
-    static dish_t nd;
+    /* the shape is checked before anything is written, so a bad save leaves the dish alone
+     * (no second 45 KB dish to load beside: on the device that would be internal RAM) */
+    const size_t strain_b = 3 + sizeof d->strain[0].name + 16 + sizeof(genome_t);
+    const size_t n_at = 6 + 21 + DISH_MAX_STRAINS * strain_b + 3 * FIELD_N * FIELD_N, cell_b = 13 + GENES;
+    if (len < n_at + 2) return false;
+    uint16_t nc; memcpy(&nc, in + n_at, 2);
+    if (nc > DISH_MAX_CELLS || len != n_at + 2 + nc * cell_b + (ver >= 3 ? 24 : 0) || !in[6 + 21]) return false;   /* (+27: strain 0 used) */
+    dish_t *dp = d;
+    #define nd (*dp)
     memset(&nd, 0, sizeof nd);
     nd.rng = seed ? seed : 0x2545F491u;
     field_mask();
@@ -798,7 +805,33 @@ bool dish_load(dish_t *d, const uint8_t *in, size_t len, uint32_t seed) {
         uint32_t prog[6]; r_bytes(&r, prog, sizeof prog);
         nd.dna = prog[0]; nd.badges = prog[1]; nd.badges_new = prog[2]; nd.dex = prog[3]; nd.unlocked = prog[4]; nd.births_paid = prog[5];
     }
-    if (!r.ok || !nd.strain[DISH_PET].used) return false;
-    *d = nd;
-    return true;
+    #undef nd
+    return r.ok;
+}
+
+/* ---- time away: the board asleep or off. The dish lives it through in one
+ * step, like a fridge: everything slows right down (metabolism ~1/700),
+ * nothing divides, a free phage doesn't last. A fed dish sleeps through a
+ * night; a few days away and the strain starves - and the vault, as ever,
+ * brings it back. ---- */
+void dish_sleep(dish_t *d, float seconds) {
+    if (seconds <= 0) return;
+    float t = fminf(seconds, 30 * 86400.0f);
+    for (int i = 0; i < DISH_MAX_CELLS; i++) {
+        cell_t *c = &d->cell[i];
+        if (c->state == CS_FREE) continue;
+        if (c->state == CS_DYING || SP[c->species].virus) { c->state = CS_FREE; continue; }
+        c->energy -= SP[c->species].metab * 0.0015f * t * (c->state == CS_SPORE ? 0.05f : 1);
+        c->div_t = 0; c->infect = 0;
+        if (c->energy <= 0) {                             /* starved in the dark: no pop, it's just gone in the morning */
+            c->state = CS_FREE;
+            d->strain[c->strain].deaths++;
+            splat(d->nutr, c->x, c->y, 0.05f, 10, 1.0f);
+        }
+    }
+    for (int k = 0; k < FIELD_N * FIELD_N; k++) { d->drug[k] *= expf(-t / 90.0f); d->flowx[k] = d->flowy[k] = 0; }
+    for (int s = 0; s < DISH_MAX_STRAINS; s++) if (d->strain[s].extinct_t > 0) d->strain[s].extinct_t = fmaxf(0.01f, d->strain[s].extinct_t - t);
+    d->outbreak_t = fmaxf(30, d->outbreak_t - t);
+    d->warm = 0; d->uv_t = 0; d->scare_t = 0;
+    for (int i = 0; i < DISH_MAX_PARTS; i++) d->part[i].used = 0;
 }

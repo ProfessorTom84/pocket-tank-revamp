@@ -131,6 +131,7 @@ typedef strat_t (*dish_brain_fn)(const dish_t *d, int strain);
 
 void dish_init(dish_t *d, uint32_t seed, species_t pet, const char *pet_name);
 void dish_tick(dish_t *d, float dt, dish_brain_fn brain);
+void dish_sleep(dish_t *d, float seconds);              /* time away (asleep, off), lived through in one step */
 
 /* strains and cells */
 int  dish_add_strain(dish_t *d, species_t sp, const char *name);

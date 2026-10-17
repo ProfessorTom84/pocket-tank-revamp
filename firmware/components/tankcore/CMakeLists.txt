@@ -6,6 +6,7 @@ set(COMMON ${CMAKE_CURRENT_LIST_DIR}/../../../common)
 idf_component_register(
     SRCS "${COMMON}/tank.c" "${COMMON}/advisor.c" "${COMMON}/render.c" "${COMMON}/icons.c" "${COMMON}/progression.c" "${COMMON}/setup.c"
          "${COMMON}/audio.c" "${COMMON}/notice.c" "${COMMON}/sounds.c" "${COMMON}/battery.c" "${COMMON}/update.c"
+         "${COMMON}/dish.c" "${COMMON}/dish_brain.c" "${COMMON}/dish_render.c" "${COMMON}/dish_ui.c" "${COMMON}/dish_prog.c"
          "persist_port_esp.c" "rtc_port_pcf85063.c"
     INCLUDE_DIRS "${COMMON}" "."
     PRIV_REQUIRES nvs_flash esp_driver_i2c

@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 /* dish_main.c — the Pocket Dish simulator.
  *
  * Headless always works (selftests, --snapshot, --narrate); with SDL2 found
@@ -7,6 +8,7 @@
 #include "dish_render.h"
 #include "dish_ui.h"
 #include "dish_prog.h"
+#include "sounds.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,9 +17,10 @@
 #include <stddef.h>
 
 static dish_t dish;
+static int64_t now_us(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return (int64_t)ts.tv_sec * 1000000 + ts.tv_nsec / 1000; }
 static dish_ui_t ui;
 static void on_event(int ev, int strain, void *ud) { (void)ud; dish_ui_event(&ui, &dish, ev, strain); }
-static uint16_t fb[DISH_W * DISH_H], scene[DISH_W * DISH_H];
+static uint16_t fb[DISH_W * DISH_H], scene[DISH_W * DISH_H], bg[DISH_W * DISH_H], fb2[DISH_W * DISH_H];
 
 static void write_ppm(const char *path, const uint16_t *px) {
     FILE *f = fopen(path, "wb");
@@ -97,6 +100,15 @@ static int selftest_dish(void) {
     CHECK(dish.strain[DISH_PET].count == 0 && dish.strain[DISH_PET].extinct_t > 0, "a wiped-out pet did not go extinct");
     run(&dish, 31, 0, false);
     CHECK(dish.strain[DISH_PET].count > 0, "the vault never brought the pet back");
+    /* 5. time away: a fed dish sleeps through a night; days away and the vault has to bring it back */
+    dish_init(&dish, 19, SP_BACILLUS, "BLIP");
+    run(&dish, 120, 20, false);
+    dish_sleep(&dish, 9 * 3600); run(&dish, 0.1f, 0, false);
+    CHECK(dish.strain[DISH_PET].count > 0, "a fed pet did not survive a night asleep");
+    dish_sleep(&dish, 4 * 86400.0f); run(&dish, 0.1f, 0, false);
+    CHECK(dish.strain[DISH_PET].count == 0 && dish.strain[DISH_PET].extinct_t > 0, "four days asleep and the pet is fine (%d cells)", dish.strain[DISH_PET].count);
+    run(&dish, 31, 0, false);
+    CHECK(dish.strain[DISH_PET].count > 0, "the vault did not bring the pet back after the time away");
     printf("selftest-dish: %s\n", fails ? "FAILED" : "ok");
     return fails ? 1 : 0;
 }
@@ -186,8 +198,15 @@ static int selftest_pet(void) {
     /* FEED drops food where the pet is */
     const strain_t *pet = &dish.strain[DISH_PET];
     float before = dish_field(dish.nutr, pet->cx, pet->cy);
+    int pitch; while (dish_ui_take_sound(&ui, &pitch) >= 0) {}
     tap_icon(ICON_FEED);
     CHECK(dish_field(dish.nutr, pet->cx, pet->cy) > before + 0.2f, "FEED put no food by the pet");
+    CHECK(dish_ui_take_sound(&ui, &pitch) == SND_FEED, "FEED made no feed sound");
+    tap_icon(ICON_CARD); run(&dish, 0.05f, 0, false);
+    int heard = -1; for (int c; (c = dish_ui_take_sound(&ui, &pitch)) >= 0;) if (c == SND_CARD_OPEN) heard = c;
+    CHECK(heard == SND_CARD_OPEN, "the card opened silently");
+    ui.page = PAGE_NONE; run(&dish, 0.05f, 0, false);
+    while (dish_ui_take_sound(&ui, &pitch) >= 0) {}
     /* the pages open and close */
     tap_icon(ICON_CARD); CHECK(ui.page == PAGE_CARD, "CARD did not open the card");
     tap_at(DISH_CX, DISH_CY); CHECK(ui.page == PAGE_NONE, "a tap did not close the card");
@@ -227,6 +246,8 @@ static int selftest_pet(void) {
     CHECK(a == b, "cells %d saved, %d loaded", a, b);
     CHECK(!strcmp(back.strain[DISH_PET].name, "BLIP"), "the pet's name was lost");
     CHECK(fabsf(back.strain[DISH_PET].vault.heat_opt - dish.strain[DISH_PET].vault.heat_opt) < 1e-6f, "the vault genome changed");
+    CHECK(!dish_load(&back, buf, n - 1, 5), "a truncated save loaded");
+    back.dna = 777; CHECK(!dish_load(&back, buf, n + 5, 5) && back.dna == 777, "a padded save loaded, or touched the dish");
     buf[0] ^= 0xFF;
     CHECK(!dish_load(&back, buf, n, 5), "a corrupt save loaded");
     run(&dish, 1, 0, false);
@@ -426,24 +447,62 @@ static int selftest_prog(void) {
     return fails ? 1 : 0;
 }
 
+static int selftest_render(void) {
+    dish_init(&dish, 51, SP_BACILLUS, "BLIP"); dish_ui_init(&ui);
+    run(&dish, 200, 15, false); dish_outbreak(&dish, 6); run(&dish, 10, 0, false);
+    dish.uv_t = 3; dish_feed(&dish, DISH_CX, DISH_CY, 1); run(&dish, 0.1f, 0, false);   /* everything at once: lamp, drop, ripples */
+    /* 1. no caches: the full frame */
+    dish_render_set_scene(NULL); dish_render_set_background(NULL);
+    dish_render(&dish, fb, DISH_W);
+    /* 2. scene + background caches, rendered as two bands: the same pixels */
+    dish_render_set_scene(scene); dish_render_set_background(bg);
+    dish_render_band(&dish, fb2, DISH_W, 0, DISH_H / 2);
+    dish_render_band(&dish, fb2, DISH_W, DISH_H / 2, DISH_H);
+    int diff = 0, lit = 0;
+    for (int i = 0; i < DISH_W * DISH_H; i++) { diff += fb[i] != fb2[i]; lit += fb[i] > 0x0841; }
+    CHECK(diff == 0, "the cached two-band frame differs from the plain frame in %d pixels", diff);
+    CHECK(lit > DISH_W * DISH_H / 4, "the frame is mostly black (%d lit)", lit);
+    /* 3. a band never writes outside its rows */
+    memset(fb2, 0xAB, sizeof fb2);
+    dish_render_band(&dish, fb2, DISH_W, DISH_H / 2, DISH_H);
+    int stray = 0; for (int i = 0; i < DISH_W * (DISH_H / 2); i++) stray += fb2[i] != 0xABAB;
+    CHECK(stray == 0, "the lower band wrote %d pixels into the upper half", stray);
+    printf("selftest-render: %s\n", fails ? "FAILED" : "ok");
+    return fails ? 1 : 0;
+}
+
 int main(int argc, char **argv) {
     for (int a = 1; a < argc; a++) {
         if (!strcmp(argv[a], "--selftest-dish")) return selftest_dish();
         if (!strcmp(argv[a], "--selftest-pet")) return selftest_pet();
         if (!strcmp(argv[a], "--selftest-evolve")) return selftest_evolve();
         if (!strcmp(argv[a], "--selftest-prog")) return selftest_prog();
+        if (!strcmp(argv[a], "--selftest-render")) return selftest_render();
         if (!strcmp(argv[a], "--bench")) {          /* render cost on a busy dish: the number to compare with the device */
-            dish_render_set_scene(scene);
+            dish_render_set_scene(scene); dish_render_set_background(bg);
             dish_init(&dish, 3, SP_BACILLUS, "BLIP"); dish_ui_init(&ui);
             run(&dish, 400, 12, false);
             dish_outbreak(&dish, 10); run(&dish, 5, 0, false);
             clock_t t0 = clock();
             for (int k = 0; k < 200; k++) { dish_tick(&dish, 1 / 30.0f, dish_brain_rules); }
             clock_t t1 = clock();
-            for (int k = 0; k < 200; k++) { dish_render(&dish, fb, DISH_W); dish_ui_render(&ui, &dish, fb, DISH_W); }
+            int64_t ui_us = 0;
+            dish_render_clock_us = now_us; memset(dish_render_prof_us, 0, sizeof dish_render_prof_us);
+            int64_t band_us[2] = { 0, 0 };
+            for (int k = 0; k < 200; k++) {
+                dish.clock += 1 / 30.0f;                 /* (time moves, so the background refreshes at its real rate) */
+                int64_t b0 = now_us(); dish_render_band(&dish, fb, DISH_W, 0, DISH_H / 2);
+                int64_t b1 = now_us(); dish_render_band(&dish, fb, DISH_W, DISH_H / 2, DISH_H);
+                band_us[0] += b1 - b0; band_us[1] += now_us() - b1;
+                int64_t u0 = now_us(); dish_ui_render(&ui, &dish, fb, DISH_W); ui_us += now_us() - u0;
+            }
             clock_t t2 = clock();
             printf("bench: %d cells, tick %.2f ms, render %.2f ms per frame\n", dish.n_live,
                    (t1 - t0) * 1000.0 / CLOCKS_PER_SEC / 200, (t2 - t1) * 1000.0 / CLOCKS_PER_SEC / 200);
+            printf("       scene %.3f | fields+motes %.3f | cells %.3f | particles %.3f | ui %.3f ms\n",
+                   dish_render_prof_us[0] / 200e3, dish_render_prof_us[1] / 200e3, dish_render_prof_us[2] / 200e3,
+                   dish_render_prof_us[3] / 200e3, ui_us / 200e3);
+            printf("       bands: top %.3f ms, bottom %.3f ms (on two cores the frame takes the slower one)\n", band_us[0] / 200e3, band_us[1] / 200e3);
             return 0;
         }
         if (!strcmp(argv[a], "--snapshot") && a + 1 < argc) return snapshot(argv[a + 1]);

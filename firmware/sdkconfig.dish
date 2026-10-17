@@ -1,0 +1,3 @@
+# Pocket Dish: the petri-dish game instead of the tank (main/dish_app.c).
+# After the board overlay: SDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.round;sdkconfig.dish"
+CONFIG_POCKET_DISH=y

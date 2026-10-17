@@ -35,6 +35,10 @@ typedef struct {
     float clock;
     int sel;                     /* the dex's / badges' tile being read, -1 none */
     int setup, starter, name_i;  /* the first-run setup: its page (0 = done), the chosen starter and name */
+    /* sounds waiting for the platform (dish_ui_take_sound), and each cue's cooldown */
+    int snd_q[8], snd_pitch[8], snd_n;
+    float snd_cd[32];
+    int prev_page, prev_lens;
 } dish_ui_t;
 
 void dish_ui_init(dish_ui_t *u);
@@ -43,7 +47,10 @@ void dish_ui_render(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int strid
 void dish_ui_touch(dish_ui_t *u, dish_t *d, float x, float y, bool down);   /* call on every touch sample: down, move, up */
 void dish_ui_event(dish_ui_t *u, const dish_t *d, int ev, int strain);     /* forward dish events here (toasts) */
 void dish_ui_toast(dish_ui_t *u, const char *s, float seconds);
-void dish_ui_begin_setup(dish_ui_t *u);                                     /* a new dish: welcome, pick a starter, name it, tips */
+void dish_ui_begin_setup(dish_ui_t *u);
+/* the next sound to play (SND_* from sounds.h, its pitch_q8 in *pitch: 256 = as recorded), -1 when none.
+ * The dish has no sounds of its own yet: it plays the tank's bank at other pitches. */
+int  dish_ui_take_sound(dish_ui_t *u, int *pitch);                                     /* a new dish: welcome, pick a starter, name it, tips */
 
 /* layout, so a test or the director can tap things without a literal pixel */
 void dish_ui_icon_pos(icon_t i, float *x, float *y);
