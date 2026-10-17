@@ -40,6 +40,9 @@
  *   ./fishsim --selftest-battery     headless battery page: stretches, sleep, learned rates, estimates, the pill
  *   ./fishsim --selftest-saves       headless update promise: every save in testdata/saves, whole and cut to older builds' lengths
  *   ./fishsim --bench                headless render-cost profile (veg, card)
+ *   ./fishsim --pumpkin <prefix>     the pumpkin lantern (0.3.6) by day and by night, BEHIND and IN FRONT, the
+ *                                    candle's flicker, and its cost with / without (PT_PUMPKIN=<x> ./fishsim
+ *                                    grants one in the windowed tank)
  *   (key Z: jump through 7 h of device-style sleep; key G: grow the canopy +
  *    algae now to try the chores - press again to cycle; key Y: the urchin)
  */
@@ -53,6 +56,7 @@
 #include <math.h>
 #include <ctype.h>
 #include <unistd.h>
+#include <time.h>
 #include "tank.h"
 #include "advisor.h"
 #include "advisor_core.h"
@@ -754,13 +758,24 @@ static int night_shift_check(void) {
         float fa = tank_algae_cover(&alone), fb = tank_algae_cover(&both), ga = ns_grass(&alone), gb = ns_grass(&both);
         printf("selftest-sleep: night shift, %3.0f h: film %.3f alone, %.3f with the snail; grass %.2f alone, %.2f with the urchin; sword plant %.2f / %.2f\n",
                hours[k], fa, fb, ga, gb, alone.veg_growth[3], both.veg_growth[3]);
-        if (fb > fa * 0.80f || fb < fa * 0.35f) { printf("FAIL: the snail's night shift is not a perceptible share (%.3f vs %.3f)\n", fb, fa); return 1; }
-        if (ga - gb < 0.08f || gb < VEG_START + (k ? 0.15f : 0.10f)) { printf("FAIL: the urchin's night shift: grass %.2f vs %.2f\n", gb, ga); return 1; }
+        /* 0.3.6 (keepers saw the helpers "on vacation"): the snail takes a third or more
+         * of a night's film, a week away lands under ALGAE_DIRTY yet still filmed; the
+         * urchin keeps a night 0.12+ lower (0.12 and 0.20 / 0.08 before) */
+        if (fb > fa * 0.65f || fb < fa * 0.35f) { printf("FAIL: the snail's night shift is not a perceptible share (%.3f vs %.3f)\n", fb, fa); return 1; }
+        if (k && (fb > ALGAE_DIRTY || fb < 0.06f)) { printf("FAIL: a week with the snail should land under ALGAE_DIRTY, still filmed (%.3f)\n", fb); return 1; }
+        if (ga - gb < 0.12f || gb < VEG_START + (k ? 0.15f : 0.10f)) { printf("FAIL: the urchin's night shift: grass %.2f vs %.2f\n", gb, ga); return 1; }
         if (fabsf(both.veg_growth[3] - alone.veg_growth[3]) > 1e-4f) { printf("FAIL: the urchin ate the sword plant\n"); return 1; }
         for (int b = 0; b < VEG_BEDS; b++) for (int i = 0; i < VEG_FRONDS_MAX; i++)
             if (both.veg_h[b][i] > 0 && both.veg_h[b][i] < URCHIN_KEEP - 1e-4f && alone.veg_h[b][i] >= URCHIN_KEEP) { printf("FAIL: the urchin took bed %d frond %d under the keep line (%.3f)\n", b, i, both.veg_h[b][i]); return 1; }
         if (both.urchin_grazed_px <= 0 || both.snail_grazed <= 0) { printf("FAIL: the tallies did not count the night\n"); return 1; }
     }
+    /* awake the urchin holds the grass where the night left it: 3 h after the night
+     * it has not climbed (0.30 an hour, until 0.3.6, let it climb ~0.04) */
+    ns_tank(&both, true); tank_tick_sleep(&both, 7 * 3600);
+    float g0 = ns_grass(&both);
+    for (int i = 0; i < 3 * 3600 * 30; i++) tank_tick(&both, 1.0f / 30.0f, advisor_rules);
+    printf("selftest-sleep: the urchin awake, 3 h: grass %.3f -> %.3f\n", g0, ns_grass(&both));
+    if (ns_grass(&both) - g0 > 0.02f) { printf("FAIL: awake the urchin let the grass climb (%.3f -> %.3f)\n", g0, ns_grass(&both)); return 1; }
     /* naps: the 20-minute graces of a night add up to one span (a few cells of chance either way) */
     static tank_t naps; ns_tank(&naps, true); ns_tank(&both, true);
     for (int i = 0; i < 21; i++) tank_tick_sleep(&naps, 1200);
@@ -1073,8 +1088,8 @@ static int selftest_sleep(void) {
  * tail reading as the defaults - and again after a save and a reload. */
 #ifndef _MSC_VER
 #include <dirent.h>
-static const size_t SAVE_CUTS[] = { 448, 1112, 1304, 1408, 1432, 1440, 1456, 1480, 1608, 1616, 1624, 1640, 1656, 1664, 1672, 1680, 1688 };
-#define SAVE_NOW 1688                    /* today's sizeof(save_t): the urchin, 2026-10-02 (its x and its tally) */
+static const size_t SAVE_CUTS[] = { 448, 1112, 1304, 1408, 1432, 1440, 1456, 1480, 1608, 1616, 1624, 1640, 1656, 1664, 1672, 1680, 1688, 1880, 1896, 1904, 1912 };
+#define SAVE_NOW 1912                    /* today's sizeof(save_t): the pieces' order, 0.3.6 (1908 of fields, padded to 8) */
 static uint32_t sv_u32(const uint8_t *e, size_t off) { uint32_t v; memcpy(&v, e + off, 4); return v; }
 static float    sv_f32(const uint8_t *e, size_t off) { float v; memcpy(&v, e + off, 4); return v; }
 static int name_cmp(const void *a, const void *b) { return strcmp(*(char *const *)a, *(char *const *)b); }
@@ -1143,6 +1158,21 @@ static int saves_check(const char *what, const uint8_t *e, float bubble_default)
         if ((sv_f32(e, 1676) > 0 && tank.urchin_x != sv_f32(e, 1676)) || tank.urchin_x < 0
             || tank.urchin_grazed_px != fmaxf(sv_f32(e, 1680), 0)) SV_FAIL("urchin at %.0f, %.0f px grazed", tank.urchin_x, tank.urchin_grazed_px);
     } else if (tank.urchin_x >= 0 || tank.urchin_grazed_px) SV_FAIL("an urchin without the unlock (%.0f)", tank.urchin_x);
+    if (memcmp(tank.decor_rank, e + 1900, DECOR_SLOTS)) SV_FAIL("the pieces' order %d %d %d %d %d", tank.decor_rank[0], tank.decor_rank[1], tank.decor_rank[2], tank.decor_rank[3], tank.decor_rank[4]);   /* (0.3.6, 1900) */
+    {                                                   /* the pumpkin lantern's spot (0.3.6, 1892): x (0 = the default), depth + 1 (0 = BEHIND) */
+        float px = sv_f32(e, 1892); uint8_t pz = e[1896];
+        float want_x = px > 0 ? px : PUMPKIN_X_DEFAULT;
+        if (fabsf(tank_decor_x(&tank, 8) - want_x) > (px > 0 ? 200.0f : 0.01f)   /* (a saved x is clamped to the glass) */
+            || tank_decor_z(&tank, 8) != (pz == DECOR_Z_FRONT + 1 ? DECOR_Z_FRONT : DECOR_Z_BACK)) SV_FAIL("pumpkin at %.0f depth %d", tank_decor_x(&tank, 8), tank_decor_z(&tank, 8));
+    }
+    if (tank.sd_unlocks & SD_ITEM_SEAHORSE) {           /* the seahorse tail (0.3.6, at 1864 past main's reserved 0.4 bytes): its tally */
+        if (tank.sh_x < 0 || tank.sh_s != fmaxf(sv_f32(e, 1864), 0) || tank.sh_hitches != (int32_t)sv_u32(e, 1868)
+            || tank.sh_trust_passed != fmaxf(sv_f32(e, 1872), 0)) SV_FAIL("seahorse %.0f s, %d hitches, +%.2f trust", tank.sh_s, (int)tank.sh_hitches, tank.sh_trust_passed);
+        float cool = sv_f32(e, 1888);
+        if (tank.sh_eaten != (int32_t)sv_u32(e, 1876) || tank.sh_snack_pay != (int32_t)sv_u32(e, 1880) || tank.sd_snacks_paid != (int32_t)sv_u32(e, 1884)
+            || tank.sh_snack_cool != (cool > 0 && cool <= SH_SNACK_COOL_S ? cool : 0)) SV_FAIL("seahorse snacks %d, %d earned, %d paid, cool %.0f", (int)tank.sh_eaten, (int)tank.sh_snack_pay, (int)tank.sd_snacks_paid, tank.sh_snack_cool);
+        for (int k = 1688; k < 1864; k++) if (e[k]) SV_FAIL("the 0.4 line's reserved tail is not zeros (byte %d)", k);
+    } else if (tank.sh_x >= 0 || tank.sh_hitches) SV_FAIL("a seahorse without the unlock (%.0f)", tank.sh_x);
     return 0;
     #undef SV_FAIL
 }
@@ -2351,9 +2381,9 @@ static int clip(const char *prefix, int seconds) {
                                     : CAST[i].stage == STAGE_ADULT ? STAGE_ADULT_AGE + 1 : STAGE_JUV_AGE + 1);
         tank.fish[i].hunger = 2; tank.fish[i].stress = 1; tank.fish[i].energy = 8;
     }
-    tank.sd_unlocks |= SD_ITEM_CASTLE | SD_ITEM_CORAL | SD_ITEM_CLUSTER | SD_ITEM_URCHIN | SD_ITEM_SHRIMP;
+    tank.sd_unlocks |= SD_ITEM_CASTLE | SD_ITEM_CORAL | SD_ITEM_CLUSTER | SD_ITEM_URCHIN | SD_ITEM_SHRIMP | SD_ITEM_SEAHORSE;
     tank_castle_place(&tank); tank_coral_place(&tank); tank_cluster_place(&tank);
-    tank_urchin_place(&tank); tank_shrimp_place(&tank, 6);
+    tank_urchin_place(&tank); tank_shrimp_place(&tank, 6); tank_seahorse_place(&tank);
     tank_decor_set(&tank, 2, 336 * sx, DECOR_Z_FRONT);
     tank_decor_set(&tank, 3, 208 * sx, DECOR_Z_FRONT);
     tank_coral_set_rgb(&tank, CORAL_PAL[7]); tank.coral_growth = CORAL_FULL;
@@ -2376,6 +2406,161 @@ static int clip(const char *prefix, int seconds) {
         if (k % 4 == 0) { snprintf(path, sizeof path, "%s_%03d.ppm", prefix, shot++); write_ppm(path, fb); }
     }
     printf("clip: wrote %d frames, %s_000.ppm ..\n", shot, prefix);
+    return 0;
+}
+
+/* --pumpkin <prefix> (0.3.6): the pumpkin lantern in a lived-in tank - the
+ * castle behind it, the urchin and the shrimp on the sand, the seahorse on a
+ * blade, three fish about - by day and with the light off, BEHIND and IN
+ * FRONT (<prefix>_{back,front}_{day,night}.ppm), 16 frames of the candle
+ * (<prefix>_flicker_NN.ppm, every 4th at 60 Hz), and the render's cost with
+ * and without it, day and night (host time: the difference, not the
+ * board's milliseconds - the board's A/B is director `pumpkin on|off`). */
+static double now_us(void) { struct timespec ts; clock_gettime(CLOCK_MONOTONIC, &ts); return ts.tv_sec * 1e6 + ts.tv_nsec / 1e3; }
+/* a bed at about growth g, RAGGED like a real tank's (every blade its own
+ * height under its own ceiling; tank_veg_set makes them all one height) */
+float tank_veg_cap(int b, int i);
+static void veg_ragged(tank_t *t, int b, float g) {
+    for (int i = 0; i < VEG_FRONDS_MAX; i++) {
+        uint32_t h = (uint32_t)(i * 2654435761u + b * 40503u + 7u); h ^= h >> 13; h *= 0x5bd1e995u; h ^= h >> 15;
+        float f = 0.78f + 0.34f * ((h >> 8) & 1023) / 1023.0f, cap = tank_veg_cap(b, i);
+        t->veg_h[b][i] = fminf(cap, g * f);
+    }
+    tank_veg_sync(t);
+}
+static int pumpkin_shot(const char *prefix) {
+    static const struct { int preset; stage_t stage; float x, y, h; } CAST[] = {
+        { 0, STAGE_ELDER, 318, 292, 3.14159f }, { 3, STAGE_ADULT, 150, 236, 0.08f }, { 1, STAGE_ADULT, 260, 130, 3.10f } };
+    const int n = (int)(sizeof CAST / sizeof CAST[0]);
+    const float sx = TANK_FW / 448.0f;
+    tank_init(&tank, 2024);
+    tank_new_population(&tank);
+    for (int i = 0; i < n; i++) tank_make_fish(&tank, i, CAST[i].preset, 0.6f, 0.6f, CAST[i].stage);
+    tank.n_fish = n;
+    for (int i = 0; i < n; i++) {
+        tank.fish[i].eaten = 60;
+        progression_set_age(&tank, i, CAST[i].stage == STAGE_ELDER ? STAGE_ELDER_AGE + 1 : STAGE_ADULT_AGE + 1);
+        tank.fish[i].hunger = 2; tank.fish[i].stress = 1; tank.fish[i].energy = 8;
+    }
+    tank.sd_unlocks |= SD_ITEM_CASTLE | SD_ITEM_URCHIN | SD_ITEM_SHRIMP | SD_ITEM_SEAHORSE | SD_ITEM_PUMPKIN;
+    tank_castle_place(&tank); tank_decor_set(&tank, 2, TANK_FLOOR_X(104), DECOR_Z_BACK);
+    tank_pumpkin_place(&tank);
+    veg_ragged(&tank, 0, 0.66f); veg_ragged(&tank, 1, 0.54f); veg_ragged(&tank, 2, 0.74f);
+    tank_urchin_place(&tank); tank_shrimp_place(&tank, 6); tank_seahorse_place(&tank);
+    for (int i = 0; i < 20 * 60; i++) tank_tick(&tank, 1.0f / 60.0f, advisor_rules);
+    tank.urchin_x = TANK_FLOOR_X(400);
+    memset(tank.algae, 0, sizeof tank.algae);
+    for (int i = 0; i < MAX_FOOD; i++) tank.food[i].alive = false;
+    static uint16_t fb[TANK_W * TANK_H];
+    render_set_scene_cache(scene_buf);
+    render_set_vignette_cache(vig_buf);
+    render_set_card_cache(card_buf);
+    render_set_dirty_mask(dirty_buf);
+    char path[512];
+    /* the cost first: the same frames with and without, day and night, both depths */
+    double us[2][3];
+    for (int night = 0; night < 2; night++)
+        for (int with = 0; with < 3; with++) {
+            tank_t keep = tank;
+            tank.night = night;
+            if (!with) tank.sd_unlocks &= ~SD_ITEM_PUMPKIN;
+            else tank_decor_set(&tank, 8, tank_decor_x(&tank, 8), with == 1 ? DECOR_Z_BACK : DECOR_Z_FRONT);
+            render_tank(&tank, fb, TANK_W);                       /* the bake, outside the timing */
+            double t0 = now_us();
+            for (int k = 0; k < 600; k++) { tank_tick(&tank, 1.0f / 60.0f, advisor_rules); render_tank(&tank, fb, TANK_W); }
+            us[night][with] = (now_us() - t0) / 600;
+            tank = keep;
+        }
+    int glow, all = render_pumpkin_px(&glow);
+    printf("pumpkin: %d px, %d redrawn a frame BEHIND (the face + the flame)\n", all, glow);
+    printf("pumpkin: tick+frame us (host)  day %.0f -> BEHIND %.0f / IN FRONT %.0f   night %.0f -> BEHIND %.0f / IN FRONT %.0f\n",
+           us[0][0], us[0][1], us[0][2], us[1][0], us[1][1], us[1][2]);
+    /* the seahorse alone, for its picture (<prefix>_seahorse.ppm): on its
+       hold, by day, the fish and the shrimp parked out of the frame round it */
+    {
+        tank.night = false; tank_light_auto(&tank);
+        for (int k = 0; k < 30; k++) {
+            tank.fish[0].x = TANK_FX0 + 30; tank.fish[0].y = 50; tank.fish[1].x = TANK_FX1 - 30; tank.fish[1].y = 50; tank.fish[2].x = TANK_FX0 + 30; tank.fish[2].y = 100;
+            for (int i = 0; i < n; i++) { tank_glass_clamp(&tank.fish[i].x, &tank.fish[i].y, 30); tank.fish[i].heading = 0.05f; tank_fish_face(&tank.fish[i]); }
+            for (int i = 0; i < tank.shrimp_n; i++) { tank.shrimp[i].x = TANK_FX1 - 30 - 12 * i; tank.shrimp[i].y = TANK_BOT - 20; }
+            tank.clock += 1.0f / 60.0f; render_tank(&tank, fb, TANK_W);
+        }
+        snprintf(path, sizeof path, "%s_seahorse.ppm", prefix); write_ppm(path, fb);
+        printf("pumpkin: the seahorse holds at %.0f,%.0f (%s)\n", tank.sh_x, tank.sh_y, tank.sh_front ? "front lane" : "back lane");
+    }
+    /* the pictures: the fish pinned where the light falls on them */
+    for (int z = 0; z < 2; z++) {
+        tank_decor_set(&tank, 8, tank_decor_x(&tank, 8), z ? DECOR_Z_FRONT : DECOR_Z_BACK);
+        for (int night = 0; night < 2; night++) {
+            tank.night = night;
+            for (int k = 0; k < 30; k++) {
+                for (int i = 0; i < n; i++) { tank.fish[i].x = TANK_FX0 + CAST[i].x * sx; tank.fish[i].y = TANK_BOT - (TANK_BOT - CAST[i].y) * sx; tank.fish[i].heading = CAST[i].h; tank_fish_face(&tank.fish[i]); }
+                tank.clock += 1.0f / 60.0f; render_tank(&tank, fb, TANK_W);
+            }
+            snprintf(path, sizeof path, "%s_%s_%s.ppm", prefix, z ? "front" : "back", night ? "night" : "day"); write_ppm(path, fb);
+        }
+    }
+    /* under a castle IN FRONT, a fish behind its tower (<prefix>_castle_{day,night}.ppm) */
+    tank_decor_set(&tank, 8, tank_decor_x(&tank, 8), DECOR_Z_BACK);
+    tank_decor_set(&tank, 2, tank_decor_x(&tank, 8) - 71, DECOR_Z_FRONT);
+    for (int night = 0; night < 2; night++) {
+        tank.night = night;
+        for (int k = 0; k < 30; k++) {
+            tank.fish[0].x = tank_decor_x(&tank, 8); tank.fish[0].y = TANK_BOT - 34; tank.fish[0].heading = 0.1f; tank_fish_face(&tank.fish[0]);
+            tank.clock += 1.0f / 60.0f; render_tank(&tank, fb, TANK_W);
+        }
+        snprintf(path, sizeof path, "%s_castle_%s.ppm", prefix, night ? "night" : "day"); write_ppm(path, fb);
+    }
+    tank_decor_set(&tank, 2, TANK_FLOOR_X(104), DECOR_Z_BACK);
+    /* Strato's stack (2026-10-17): the lantern BEHIND, the grass, the sword plant
+       AMONG and a coral IN FRONT, all on one spot (<prefix>_stack_{day,night}.ppm) */
+    tank.sd_unlocks |= SD_ITEM_PLANT | SD_ITEM_CORAL; tank_plant_place(&tank); tank_veg_set(&tank, 3, 0.7f);
+    tank_decor_set(&tank, 0, tank_decor_x(&tank, 8) + 16, DECOR_Z_MIDDLE);
+    tank_coral_place(&tank); tank.coral_growth = CORAL_FULL; tank_coral_set_rgb(&tank, CORAL_PAL[2]);
+    tank_decor_set(&tank, 3, tank_decor_x(&tank, 8) - 10, DECOR_Z_FRONT);
+    for (int night = 0; night < 2; night++) {
+        tank.night = night;
+        for (int k = 0; k < 30; k++) { tank.clock += 1.0f / 60.0f; render_tank(&tank, fb, TANK_W); }
+        snprintf(path, sizeof path, "%s_stack_%s.ppm", prefix, night ? "night" : "day"); write_ppm(path, fb);
+    }
+    tank.sd_unlocks &= ~(SD_ITEM_PLANT | SD_ITEM_CORAL);
+    /* the loop for the newsletter: a second lit, then the light goes out and
+       the candle has the tank (70 frames, every 4th at 60 Hz = 15 a second);
+       the fish on slow paths that keep clear of the lantern */
+    tank.night = false; tank_light_auto(&tank);          /* the light on, as a keeper finds the tank */
+    for (int k = 0; k < 70; k++) {
+        if (k == 18) tank_toggle_light(&tank);           /* the double-tap: the light goes out (tank_tick keeps t->night from the light, so set it this way, not by hand) */
+        for (int s2 = 0; s2 < 4; s2++) {
+            tank_tick(&tank, 1.0f / 60.0f, advisor_rules);
+            float ph = (k * 4 + s2) / 60.0f;
+            const float px0 = tank_decor_x(&tank, 8);
+            tank.fish[0].x = px0 - 150 * sx + 26 * sx * sinf(ph * 0.5f); tank.fish[0].y = TANK_BOT - 128 * sx + 6 * sinf(ph * 0.9f); tank.fish[0].heading = sinf(ph * 0.5f + 1.5708f) > 0 ? 0.05f : 3.09f;
+            tank.fish[1].x = px0 + 118 * sx + 22 * sx * sinf(ph * 0.42f + 2); tank.fish[1].y = TANK_BOT - 176 * sx + 5 * sinf(ph * 0.7f); tank.fish[1].heading = sinf(ph * 0.42f + 3.5708f) > 0 ? 0.05f : 3.09f;
+            tank.fish[2].x = px0 - 40 * sx + 70 * sx * sinf(ph * 0.3f + 1); tank.fish[2].y = TANK_BOT - 236 * sx; tank.fish[2].heading = sinf(ph * 0.3f + 2.5708f) > 0 ? 0.05f : 3.09f;
+            for (int i = 0; i < n; i++) { tank.fish[i].hunger = 2; tank.fish[i].stress = 1; tank_fish_face(&tank.fish[i]); }
+            render_tank(&tank, fb, TANK_W);
+        }
+        snprintf(path, sizeof path, "%s_flicker_%02d.ppm", prefix, k); write_ppm(path, fb);
+    }
+    /* the pages: the shop's last page with it for sale and owned, its modal,
+       its placement page (<prefix>_shop_{sale,owned,modal}.ppm, _place.ppm) */
+    tank.night = false; render_tank(&tank, fb, TANK_W);
+    for (int owned = 0; owned < 2; owned++) {
+        if (owned) tank.sd_unlocks |= SD_ITEM_PUMPKIN; else { tank.sd_unlocks &= ~SD_ITEM_PUMPKIN; tank.sd_balance = 80; }
+        render_shop_leave(); render_shop(&tank, fb, TANK_W);
+        for (int k = 0; k < 2; k++) { render_shop_tap(&tank, PAGE_X + SHP_ARROW_X1 + SHP_ARROW_W / 2, PAGE_Y + SHP_ARROW_Y + SHP_ARROW_H / 2); render_shop(&tank, fb, TANK_W); }   /* the last page */
+        snprintf(path, sizeof path, "%s_shop_%s.ppm", prefix, owned ? "owned" : "sale"); write_ppm(path, fb);
+        if (owned) {
+            render_shop_tap(&tank, PAGE_X + 100, PAGE_Y + SHP_ROW_Y0 + 20); render_shop(&tank, fb, TANK_W);   /* its row (the page's first) -> the modal */
+            snprintf(path, sizeof path, "%s_shop_modal.ppm", prefix); write_ppm(path, fb);
+        }
+        render_shop_leave();
+    }
+    setup_begin_place(&tank, 8);
+    render_tank(&tank, fb, TANK_W); render_setup(&tank, fb, TANK_W, 1.0f);
+    snprintf(path, sizeof path, "%s_place.ppm", prefix); write_ppm(path, fb);
+    setup_cancel(&tank);
+    printf("pumpkin: wrote %s_{back,front}_{day,night}.ppm, %s_flicker_00..69.ppm (a second lit, then the light out), _shop_{sale,owned,modal}.ppm, _place.ppm\n", prefix, prefix);
     return 0;
 }
 
@@ -2462,7 +2647,7 @@ static int snapshot(const char *prefix, int seconds) {
     {   /* with a shrimp school (2026-09-30): the TANK row's arrow (ringed: the full
            school's badge, earned and not seen, waits on page 2), then page 2 */
         uint32_t unl = tank.sd_unlocks, tms = tank.tank_ms_bits, seen = tank.tank_ms_seen;
-        tank.sd_unlocks |= SD_ITEM_SHRIMP; tank.tank_ms_bits |= TMS_FULL_SCHOOL; tank.tank_ms_seen = tank.tank_ms_bits & ~TMS_FULL_SCHOOL;
+        tank.sd_unlocks |= SD_ITEM_SHRIMP | SD_ITEM_SEAHORSE; tank.tank_ms_bits |= TMS_FULL_SCHOOL; tank.tank_ms_seen = tank.tank_ms_bits & ~TMS_FULL_SCHOOL;   /* (+ the seahorse bought: its badge, gray, on page 2 - 0.3.6) */
         render_milestones(&tank, fb, TANK_W);
         snprintf(path, sizeof path, "%s_milestones_shrimp.ppm", prefix); write_ppm(path, fb);
         render_milestones_tap(&tank, PAGE_X + 426, PAGE_Y + 254 + 20);
@@ -2593,6 +2778,72 @@ static int snapshot(const char *prefix, int seconds) {
       snprintf(path, sizeof path, "%s_tank_urchin_sand.ppm", prefix); write_ppm(path, fb);
       tank.urchin_grazed_px = 1234; render_stats_card(&tank, RENDER_CARD_URCHIN, fb, TANK_W);
       snprintf(path, sizeof path, "%s_urchin_card.ppm", prefix); write_ppm(path, fb); }
+    { tank.sd_unlocks |= SD_ITEM_SEAHORSE; tank_seahorse_place(&tank);   /* the seahorse (0.3.6): on a blade, swaying; adrift; at the finger; its card */
+      for (int i = 0; i < 30; i++) tank_tick(&tank, 1.0f / 60.0f, advisor_rules);
+      render_tank(&tank, fb, TANK_W);
+      snprintf(path, sizeof path, "%s_tank_seahorse.ppm", prefix); write_ppm(path, fb);
+      tank.sh_mode = SH_DRIFT; tank.sh_bed = tank.sh_frond = -1; tank.sh_x = TANK_W / 2; tank.sh_y = TANK_BOT - 160; tank.sh_tx = tank.sh_x + 60; tank.sh_ty = tank.sh_y;
+      for (int i = 0; i < 20; i++) tank_tick(&tank, 1.0f / 60.0f, advisor_rules);
+      render_tank(&tank, fb, TANK_W);
+      snprintf(path, sizeof path, "%s_tank_seahorse_adrift.ppm", prefix); write_ppm(path, fb);
+      for (int k = 0; k < 4; k++) {                                 /* on its way to the finger: the pitch with speed */
+          for (int i = 0; i < 60 * (k == 0 ? 3 : 1); i++) { tank_touch_hold(&tank, TANK_FX0 + 90, TANK_BOT - 150); tank_tick(&tank, 1.0f / 60.0f, advisor_rules); }
+          render_tank(&tank, fb, TANK_W);
+          snprintf(path, sizeof path, "%s_tank_seahorse_swim%d.ppm", prefix, k); write_ppm(path, fb);
+      }
+      for (int i = 0; i < 60 * 8; i++) { tank_touch_hold(&tank, TANK_FX0 + 90, TANK_BOT - 150); tank_tick(&tank, 1.0f / 60.0f, advisor_rules); }
+      render_tank(&tank, fb, TANK_W);
+      snprintf(path, sizeof path, "%s_tank_seahorse_hitch.ppm", prefix); write_ppm(path, fb);
+      { /* a landing on a blade, frame by frame: the coil closes over SH_LAND_S (no jump) */
+        for (int i = 0; i < 60 * 6; i++) tank_tick(&tank, 1.0f / 60.0f, advisor_rules);   /* the finger lifted: it lingers, then heads for a blade */
+        int shot = 0, since = -1;
+        for (int i = 0; i < 60 * 40 && shot < 11; i++) {
+            tank_tick(&tank, 1.0f / 60.0f, advisor_rules);
+            float d = tank_dist(tank.sh_x, tank.sh_y, tank.sh_tx, tank.sh_ty);
+            if (since < 0 && tank.sh_mode == SH_PERCH) since = 0; else if (since >= 0) since++;
+            bool take = (since < 0 && tank.sh_mode == SH_DRIFT && tank.sh_bed >= 0 && d < 7 && (i % 6) == 0) || (since >= 0 && (since == 0 || since == 9 || since == 18 || since == 30 || since == 48));
+            if (!take) continue;
+            render_tank(&tank, fb, TANK_W);
+            snprintf(path, sizeof path, "%s_tank_seahorse_land%d.ppm", prefix, shot++); write_ppm(path, fb);
+            printf("land shot %d: mode %d d %.1f since %d at %.1f,%.1f\n", shot - 1, tank.sh_mode, d, since, tank.sh_x, tank.sh_y);
+        }
+      }
+      { /* the other anchors: a castle tower, the coral's trunk, a reef tube, the sand */
+        float veg_keep[VEG_BEDS_MAX][VEG_FRONDS_MAX]; memcpy(veg_keep, tank.veg_h, sizeof veg_keep);
+        for (int b = 0; b < tank_veg_beds(&tank); b++) tank_veg_set(&tank, b, 0.15f);   /* the sword plant's leaves too */
+        uint32_t unl = tank.sd_unlocks;
+        tank.sd_unlocks = (unl & ~(SD_ITEM_CORAL | SD_ITEM_CLUSTER)) | SD_ITEM_CASTLE; tank_castle_place(&tank); tank_decor_set(&tank, 2, TANK_W / 2, DECOR_Z_BACK);
+        tank.sh_mode = SH_DRIFT; tank.sh_akind = SH_ANCHOR_NONE; tank.sh_stay = 0;
+        for (int i = 0; i < 60 * 25; i++) tank_tick(&tank, 1.0f / 60.0f, advisor_rules);
+        render_tank(&tank, fb, TANK_W); snprintf(path, sizeof path, "%s_tank_seahorse_castle.ppm", prefix); write_ppm(path, fb);
+        printf("castle shot: mode %d kind %d item %d at %.0f,%.0f\n", tank.sh_mode, tank.sh_akind, tank.sh_aitem, tank.sh_x, tank.sh_y);
+        tank.sd_unlocks = (unl & ~(SD_ITEM_CASTLE | SD_ITEM_CLUSTER)) | SD_ITEM_CORAL; tank_coral_place(&tank); tank_decor_set(&tank, 3, TANK_W / 2, DECOR_Z_FRONT); tank.coral_growth = 1.0f;   /* IN FRONT: the front lane */
+        tank.sh_mode = SH_DRIFT; tank.sh_akind = SH_ANCHOR_NONE; tank.sh_stay = 0; tank.sh_x = TANK_W / 2 - 80; tank.sh_y = TANK_BOT - 120;
+        for (int i = 0; i < 60 * 25; i++) tank_tick(&tank, 1.0f / 60.0f, advisor_rules);
+        render_tank(&tank, fb, TANK_W); snprintf(path, sizeof path, "%s_tank_seahorse_coral.ppm", prefix); write_ppm(path, fb);
+        printf("coral shot: mode %d kind %d item %d at %.0f,%.0f\n", tank.sh_mode, tank.sh_akind, tank.sh_aitem, tank.sh_x, tank.sh_y);
+        tank.sd_unlocks = (unl & ~(SD_ITEM_CASTLE | SD_ITEM_CORAL)) | SD_ITEM_CLUSTER; tank_cluster_place(&tank); tank_decor_set(&tank, 4, TANK_W / 2, DECOR_Z_BACK); tank.cluster_growth = 1.0f;
+        tank.sh_mode = SH_DRIFT; tank.sh_akind = SH_ANCHOR_NONE; tank.sh_stay = 0; tank.sh_x = TANK_W / 2 - 80; tank.sh_y = TANK_BOT - 120;
+        for (int i = 0; i < 60 * 25; i++) tank_tick(&tank, 1.0f / 60.0f, advisor_rules);
+        render_tank(&tank, fb, TANK_W); snprintf(path, sizeof path, "%s_tank_seahorse_reef.ppm", prefix); write_ppm(path, fb);
+        printf("reef shot: mode %d kind %d item %d at %.0f,%.0f\n", tank.sh_mode, tank.sh_akind, tank.sh_aitem, tank.sh_x, tank.sh_y);
+        tank.sd_unlocks = unl & ~(SD_ITEM_CASTLE | SD_ITEM_CORAL | SD_ITEM_CLUSTER);
+        tank.sh_mode = SH_DRIFT; tank.sh_akind = SH_ANCHOR_NONE; tank.sh_stay = 0;
+        for (int i = 0; i < 60 * 25; i++) tank_tick(&tank, 1.0f / 60.0f, advisor_rules);
+        render_tank(&tank, fb, TANK_W); snprintf(path, sizeof path, "%s_tank_seahorse_sand.ppm", prefix); write_ppm(path, fb);
+        printf("sand shot: mode %d kind %d at %.0f,%.0f\n", tank.sh_mode, tank.sh_akind, tank.sh_x, tank.sh_y);
+        tank.sd_unlocks = unl; memcpy(tank.veg_h, veg_keep, sizeof veg_keep); tank_veg_sync(&tank);
+      }
+      { /* the snatch at its furthest: the head and neck out (SH_SNAP_AT) */
+        tank.sh_snap = SH_SNAP_AT; tank.sh_snap_food = -1;
+        render_tank(&tank, fb, TANK_W); snprintf(path, sizeof path, "%s_tank_seahorse_snatch.ppm", prefix); write_ppm(path, fb);
+        printf("snatch shot: at %.0f,%.0f jut %.1f\n", tank.sh_x, tank.sh_y, tank_seahorse_jut(&tank));
+        tank.sh_snap = -1;
+        render_tank(&tank, fb, TANK_W); snprintf(path, sizeof path, "%s_tank_seahorse_nosnatch.ppm", prefix); write_ppm(path, fb); }
+      tank.sh_s = 3.5f * 86400; tank.sh_hitches = 12; tank.sh_trust_passed = 2.4f;
+      render_stats_card(&tank, RENDER_CARD_SEAHORSE, fb, TANK_W);
+      snprintf(path, sizeof path, "%s_seahorse_card.ppm", prefix); write_ppm(path, fb);
+      tank.sd_unlocks &= ~SD_ITEM_SEAHORSE; tank.sh_x = -1; }
     tank.sd_unlocks = 0; tank.sd_balance = 0;
     render_milestones_tap(&tank, PAGE_X + 176 + 16, PAGE_Y + 4 + 40 + 20);           /* fish 1's first badge -> the detail modal */
     render_milestones(&tank, fb, TANK_W);
@@ -3088,6 +3339,220 @@ static int selftest_shop(void) {
         SHOP_WANT("after the urchin");
         if (!(tank.sd_unlocks & SD_ITEM_URCHIN) || tank.urchin_x < 0) { printf("FAIL: no urchin on the floor\n"); return 1; }
         if (progression_sell(&tank, 6)) { printf("FAIL: the urchin sold back\n"); return 1; }
+        /* the seahorse (0.3.6): the eighth item at its price, on a blade (an
+           even grass frond, tall enough); a resting finger brings it to the
+           finger's edge and counts ONE hitch for the hold, and trust runs at
+           twice the base while it hangs there; the finger lifts, it lingers,
+           then drifts back to a blade; its tap, its card, its pixels */
+        {
+            tank_t *was = malloc(sizeof(tank_t)); memcpy(was, &tank, sizeof(tank_t));   /* put back after: the grass, the fish, the finger */
+            tank.sd_balance = SD_PRICE_SEAHORSE - 1;
+            if (progression_buy(&tank, 7)) { printf("FAIL: the seahorse sold short\n"); return 1; }
+            tank.sd_balance = SD_PRICE_SEAHORSE; want = 0;
+            for (int b = 0; b < VEG_BEDS; b++) tank_veg_set(&tank, b, 0.50f);
+            if (SD_ITEMS[7].bit != SD_ITEM_SEAHORSE || !progression_buy(&tank, 7)) { printf("FAIL: could not buy the seahorse\n"); return 1; }
+            SHOP_WANT("after the seahorse");
+            if (!(tank.sd_unlocks & SD_ITEM_SEAHORSE) || tank.sh_x < 0) { printf("FAIL: no seahorse in the tank\n"); return 1; }
+            if (progression_sell(&tank, 7)) { printf("FAIL: the seahorse sold back\n"); return 1; }
+            if (tank.sh_mode != SH_PERCH || tank.sh_bed < 0 || tank.sh_front != (bool)(tank.sh_frond & 1)) { printf("FAIL: the seahorse did not take a blade in its lane (mode %d, bed %d, frond %d, front %d)\n", tank.sh_mode, tank.sh_bed, tank.sh_frond, tank.sh_front); return 1; }
+            int pb = tank.sh_bed, pf = tank.sh_frond;
+            float bx; int segs = tank_veg_frond(&tank, tank.sh_bed, tank.sh_frond, &bx);
+            float gy = TANK_BOT - 16 - segs * SH_GRIP_FRAC * VEG_SEG_PX;
+            if (fabsf(tank.sh_x - bx) > 0.5f || fabsf(tank.sh_y - gy) > 0.5f) { printf("FAIL: the coil is at %.1f,%.1f, the blade's grip at %.1f,%.1f\n", tank.sh_x, tank.sh_y, bx, gy); return 1; }
+            /* trust: the base rate alone, then with it hitched */
+            for (int i = 0; i < tank.n_fish; i++) { tank.fish[i].trust = 3; tank.fish[i].hunger = 2; }
+            float hx = TANK_FX0 + 80, hy = TANK_BOT - 160, t0 = tank.fish[0].trust;
+            for (int i = 0; i < 60 * 4; i++) { tank_touch_hold(&tank, hx, hy); SHOP_TICK(1); }
+            float base4 = tank.fish[0].trust - t0;                   /* 4 s of holding, 1.3 s of it settled: the base rate */
+            if (tank.sh_mode != SH_HITCH) { printf("FAIL: the resting finger did not call the seahorse (mode %d)\n", tank.sh_mode); return 1; }
+            int secs = 0; while (!tank.sh_hitched && secs < 40) { for (int i = 0; i < 60; i++) { tank_touch_hold(&tank, hx, hy); SHOP_TICK(1); } secs++; }
+            if (!tank.sh_hitched) { printf("FAIL: the seahorse never reached the finger (at %.0f,%.0f heading %.0f,%.0f)\n", tank.sh_x, tank.sh_y, tank.sh_tx, tank.sh_ty); return 1; }
+            if (tank.sh_hitches != 1) { printf("FAIL: %d hitches for one hold\n", (int)tank.sh_hitches); return 1; }
+            if (fabsf(tank.sh_x - hx) < SH_HITCH_OFF - 4 || fabsf(tank.sh_x - hx) > SH_HITCH_OFF + 4) { printf("FAIL: it hitched %.0f px from the finger, not beside it\n", fabsf(tank.sh_x - hx)); return 1; }
+            t0 = tank.fish[0].trust; float tp0 = tank.sh_trust_passed;
+            for (int i = 0; i < 60 * 4; i++) { tank_touch_hold(&tank, hx, hy); SHOP_TICK(1); }
+            float boosted4 = tank.fish[0].trust - t0;
+            if (tank.sh_hitches != 1) { printf("FAIL: the hold counted again (%d)\n", (int)tank.sh_hitches); return 1; }
+            if (boosted4 < 4 * 0.012f * 2 * 0.95f || boosted4 > 4 * 0.012f * 2 * 1.05f) { printf("FAIL: trust rose %.4f in 4 s hitched (want ~%.4f)\n", boosted4, 4 * 0.024f); return 1; }
+            if (tank.sh_trust_passed - tp0 < 4 * 0.012f * tank.n_fish * 0.9f) { printf("FAIL: the trust passed on tallied %.4f\n", tank.sh_trust_passed - tp0); return 1; }
+            printf("selftest-shop: seahorse: on bed %d frond %d; came to the finger in %d s, hitched %.0f px beside it; trust +%.4f in 4 s of plain holding, +%.4f hitched; +%.3f passed on\n",
+                   pb, pf, secs, fabsf(tank.sh_x - hx), base4, boosted4, tank.sh_trust_passed - tp0);
+            SHOP_TICK(60 * 2);                                        /* the finger lifts: it lingers */
+            if (tank.sh_hitched || tank.sh_mode != SH_HITCH) { printf("FAIL: it did not linger after the finger lifted (mode %d)\n", tank.sh_mode); return 1; }
+            SHOP_TICK(60 * 40);
+            if (tank.sh_mode != SH_PERCH) { printf("FAIL: it did not go back to a blade (mode %d at %.0f,%.0f for %.0f,%.0f)\n", tank.sh_mode, tank.sh_x, tank.sh_y, tank.sh_tx, tank.sh_ty); return 1; }
+            /* the scissors take the blade DOWN under it but not out (Strato 10-15,
+               the watch: "it stuck with it and teleported down"): no teleport - it
+               lets go, and is back on the same blade at its new grip in a few seconds */
+            {
+                int cb = tank.sh_bed, cf = tank.sh_frond; float y0 = tank.sh_y, h0 = tank.veg_h[cb][cf];
+                tank.veg_h[cb][cf] = h0 - 0.18f; tank_veg_sync(&tank);
+                SHOP_TICK(2);
+                if (fabsf(tank.sh_y - y0) > 4) { printf("FAIL: the blade cut down: it teleported %.0f px in two frames\n", tank.sh_y - y0); return 1; }
+                if (tank.sh_mode != SH_DRIFT) { printf("FAIL: the blade cut down: it did not let go (mode %d)\n", tank.sh_mode); return 1; }
+                float gx, gy; int segs = tank_veg_frond(&tank, cb, cf, &gx); gy = TANK_BOT - 16 - segs * SH_GRIP_FRAC * VEG_SEG_PX;
+                int s5 = 0; while (!(tank.sh_mode == SH_PERCH) && s5 < 20) { SHOP_TICK(60); s5++; }
+                if (tank.sh_mode != SH_PERCH || tank.sh_bed != cb || tank.sh_frond != cf || fabsf(tank.sh_y - gy) > 0.5f) { printf("FAIL: the blade cut down: not back on it at the new grip (mode %d bed %d frond %d y %.0f want %.0f)\n", tank.sh_mode, tank.sh_bed, tank.sh_frond, tank.sh_y, gy); return 1; }
+                printf("selftest-shop: seahorse: its blade cut down %.0f px under it -> let go, back on it at the new grip in %d s\n", gy - y0, s5);
+            }
+            /* the scissors take its blade (Strato 10-15: it hung frozen in the
+               water after a cut): it must keep moving and be on another blade
+               within half a minute */
+            {
+                int cb = tank.sh_bed, cf = tank.sh_frond; float sx0 = tank.sh_x, sy0 = tank.sh_y, moved = 0, lx = sx0, ly = sy0;
+                tank.veg_h[cb][cf] = 0.12f; tank_veg_sync(&tank);
+                for (int sec = 0; sec < 30 && !(tank.sh_mode == SH_PERCH && !(tank.sh_bed == cb && tank.sh_frond == cf)); sec++) {
+                    SHOP_TICK(60);
+                    moved += tank_dist(lx, ly, tank.sh_x, tank.sh_y); lx = tank.sh_x; ly = tank.sh_y;
+                }
+                if (tank.sh_mode != SH_PERCH || (tank.sh_bed == cb && tank.sh_frond == cf)) { printf("FAIL: after the cut it is not on another blade (mode %d, bed %d frond %d, moved %.0f px)\n", tank.sh_mode, tank.sh_bed, tank.sh_frond, moved); return 1; }
+                if (moved < 6) { printf("FAIL: after the cut it barely moved (%.0f px)\n", moved); return 1; }   /* the next blade may be the neighbour, a slot away */
+                printf("selftest-shop: seahorse: its blade cut under it -> %.0f px of swimming to bed %d frond %d\n", moved, tank.sh_bed, tank.sh_frond);
+                /* a tank with NO blade tall enough (the universal anchor, Strato 10-15):
+                   the castle placed BEHIND = a post to hold (a tower); nothing at all
+                   = it rests on the SAND, lifts off to look now and then; the grass
+                   back = a blade again */
+                float was_h[VEG_BEDS_MAX][VEG_FRONDS_MAX]; memcpy(was_h, tank.veg_h, sizeof was_h);
+                for (int b = 0; b < VEG_BEDS; b++) tank_veg_set(&tank, b, 0.15f);
+                tank.sd_unlocks |= SD_ITEM_CASTLE; tank_castle_place(&tank); tank_decor_set(&tank, 2, (TANK_FX0 + TANK_FX1) / 2, DECOR_Z_BACK);
+                int secs2 = 0; while (!(tank.sh_mode == SH_PERCH && tank.sh_akind == SH_ANCHOR_POST) && secs2 < 60) { SHOP_TICK(60); secs2++; }
+                if (tank.sh_mode != SH_PERCH || tank.sh_akind != SH_ANCHOR_POST || tank.sh_aitem != 2) { printf("FAIL: no blade, a castle behind: it did not hold a tower (mode %d kind %d item %d after %d s)\n", tank.sh_mode, tank.sh_akind, tank.sh_aitem, secs2); return 1; }
+                float px0 = tank.sh_x, py0 = tank.sh_y;
+                printf("selftest-shop: seahorse: no blade tall enough -> holding %s at %.0f,%.0f after %d s\n", tank_seahorse_holding(&tank), px0, py0, secs2);
+                tank_decor_set(&tank, 2, tank_decor_x(&tank, 2), DECOR_Z_FRONT);   /* the castle IN FRONT (its default): a hold too - a front tower puts it in its FRONT LANE */
+                { int s4 = 0; while (!(tank.sh_mode == SH_PERCH && tank.sh_akind == SH_ANCHOR_POST && (tank.sh_front || fabsf(tank.sh_x - (tank_decor_x(&tank, 2) + 39)) < 0.5f)) && s4 < 60) { SHOP_TICK(60); s4++; }
+                  if (tank.sh_mode != SH_PERCH || tank.sh_akind != SH_ANCHOR_POST || tank.sh_aitem != 2) { printf("FAIL: the castle in front: not on a tower (mode %d kind %d item %d)\n", tank.sh_mode, tank.sh_akind, tank.sh_aitem); return 1; }
+                  bool rear = fabsf(tank.sh_x - (tank_decor_x(&tank, 2) + 39)) < 0.5f;
+                  if (tank.sh_front != !rear) { printf("FAIL: the castle in front: on %s tower but front lane %d\n", rear ? "the rear" : "a front", tank.sh_front); return 1; }
+                  printf("selftest-shop: seahorse: the castle IN FRONT -> %s tower after %d s, %s lane\n", rear ? "its rear" : "a front", s4, tank.sh_front ? "the FRONT" : "the fish"); px0 = tank.sh_x;
+                  tank.sh_stay = 0.5f; SHOP_TICK(60 * 8);                 /* its stay over: another tower (any depth now) */
+                  if (tank.sh_mode != SH_PERCH || tank.sh_akind != SH_ANCHOR_POST || tank.sh_aitem != 2) { printf("FAIL: its stay over on the front castle: not on another tower (mode %d kind %d)\n", tank.sh_mode, tank.sh_akind); return 1; }
+                  /* a coral IN FRONT (its default) alone: its trunk, in the front lane */
+                  tank.sd_unlocks &= ~SD_ITEM_CASTLE; tank.sd_unlocks |= SD_ITEM_CORAL; tank_coral_place(&tank); tank_decor_set(&tank, 3, (TANK_FX0 + TANK_FX1) / 2, DECOR_Z_FRONT); tank.coral_growth = 1.0f;
+                  s4 = 0; while (!(tank.sh_mode == SH_PERCH && tank.sh_akind == SH_ANCHOR_POST && tank.sh_aitem == 3) && s4 < 60) { SHOP_TICK(60); s4++; }
+                  if (tank.sh_mode != SH_PERCH || tank.sh_aitem != 3 || !tank.sh_front) { printf("FAIL: a coral in front: not on its trunk in the front lane (mode %d item %d front %d)\n", tank.sh_mode, tank.sh_aitem, tank.sh_front); return 1; }
+                  printf("selftest-shop: seahorse: a coral IN FRONT -> its trunk after %d s, the FRONT lane\n", s4);
+                  tank.sd_unlocks &= ~SD_ITEM_CORAL; tank.sd_unlocks |= SD_ITEM_CASTLE; tank_castle_place(&tank); tank_decor_set(&tank, 2, (TANK_FX0 + TANK_FX1) / 2, DECOR_Z_FRONT);
+                  s4 = 0; while (!(tank.sh_mode == SH_PERCH && tank.sh_aitem == 2) && s4 < 60) { SHOP_TICK(60); s4++; }
+                  px0 = tank.sh_x;
+                  /* the only hold there is (a coral BEHIND, young: one trunk post), its stay over: it keeps it */
+                  tank.sd_unlocks &= ~SD_ITEM_CASTLE; tank.sd_unlocks |= SD_ITEM_CORAL; tank_coral_place(&tank); tank_decor_set(&tank, 3, (TANK_FX0 + TANK_FX1) / 2, DECOR_Z_BACK); tank.coral_growth = 0.5f;
+                  s4 = 0; while (!(tank.sh_mode == SH_PERCH && tank.sh_aitem == 3) && s4 < 60) { SHOP_TICK(60); s4++; }
+                  px0 = tank.sh_x; tank.sh_stay = 0.5f; SHOP_TICK(60 * 5);
+                  if (tank.sh_mode != SH_PERCH || tank.sh_akind != SH_ANCHOR_POST || fabsf(tank.sh_x - px0) > 0.5f) { printf("FAIL: the only hold, its stay over: it left it (mode %d kind %d)\n", tank.sh_mode, tank.sh_akind); return 1; }
+                  tank.sd_unlocks &= ~SD_ITEM_CORAL; tank.sd_unlocks |= SD_ITEM_CASTLE; tank_castle_place(&tank); tank_decor_set(&tank, 2, (TANK_FX0 + TANK_FX1) / 2, DECOR_Z_BACK);
+                  s4 = 0; while (!(tank.sh_mode == SH_PERCH && tank.sh_aitem == 2) && s4 < 60) { SHOP_TICK(60); s4++; }
+                  px0 = tank.sh_x; }
+                tank_decor_set(&tank, 2, tank_decor_x(&tank, 2) + 40, DECOR_Z_BACK);   /* the keeper moves the castle: it lets go, takes a tower again */
+                SHOP_TICK(60 * 2);
+                if (tank.sh_mode == SH_PERCH && fabsf(tank.sh_x - px0) < 0.5f) { printf("FAIL: the castle moved and it stayed in the air\n"); return 1; }
+                tank.sd_unlocks &= ~SD_ITEM_CASTLE;                   /* and sold: nothing left but the sand */
+                secs2 = 0; while (!(tank.sh_mode == SH_PERCH && tank.sh_akind == SH_ANCHOR_SAND) && secs2 < 60) { SHOP_TICK(60); secs2++; }
+                if (tank.sh_mode != SH_PERCH || tank.sh_akind != SH_ANCHOR_SAND || fabsf(tank.sh_y - (TANK_BOT - 21)) > 0.5f) { printf("FAIL: nothing to hold: it is not resting on the sand (mode %d kind %d y %.0f after %d s)\n", tank.sh_mode, tank.sh_akind, tank.sh_y, secs2); return 1; }
+                printf("selftest-shop: seahorse: nothing to hold -> resting on the sand at %.0f,%.0f after %d s\n", tank.sh_x, tank.sh_y, secs2);
+                /* resting, the keeper buys the sword plant: it goes to a leaf at once (Strato 10-15) */
+                { uint32_t had = tank.sd_unlocks; bool had_plant = (had & SD_ITEM_PLANT) != 0;
+                  tank.sd_unlocks |= SD_ITEM_PLANT; tank_plant_place(&tank); tank_decor_set(&tank, 0, tank_decor_x(&tank, 0), DECOR_Z_BACK);
+                  int left = -1, secs3 = 0;
+                  while (!(tank.sh_mode == SH_PERCH && tank.sh_akind == SH_ANCHOR_BLADE) && secs3 < 40) {
+                      SHOP_TICK(60); secs3++;
+                      if (left < 0 && !(tank.sh_mode == SH_PERCH && tank.sh_akind == SH_ANCHOR_SAND)) left = secs3;   /* off the sand */
+                  }
+                  if (tank.sh_mode != SH_PERCH || tank.sh_akind != SH_ANCHOR_BLADE || tank.sh_bed != 3) { printf("FAIL: a sword plant bought while it rested: not on a leaf (mode %d kind %d bed %d after %d s)\n", tank.sh_mode, tank.sh_akind, tank.sh_bed, secs3); return 1; }
+                  if (left < 0 || left > 4) { printf("FAIL: it took %d s to leave the sand for the new plant (the look is every 2 s)\n", left); return 1; }
+                  printf("selftest-shop: seahorse: a sword plant bought while it rested -> off the sand in %d s, holding %s after %d s\n", left, tank_seahorse_holding(&tank), secs3);
+                  if (!had_plant) tank.sd_unlocks &= ~SD_ITEM_PLANT;
+                  for (int i = 0; i < VEG_FRONDS_MAX; i++) tank.veg_h[3][i] = 0.15f; tank_veg_sync(&tank);   /* and cut (or gone): the sand again */
+                  secs3 = 0; while (!(tank.sh_mode == SH_PERCH && tank.sh_akind == SH_ANCHOR_SAND) && secs3 < 60) { SHOP_TICK(60); secs3++; }
+                  if (tank.sh_mode != SH_PERCH || tank.sh_akind != SH_ANCHOR_SAND) { printf("FAIL: the leaf cut, it did not go back to the sand (mode %d kind %d)\n", tank.sh_mode, tank.sh_akind); return 1; } }
+                float sx1 = tank.sh_x; int lifted = 0;
+                for (int sec = 0; sec < 130 && !lifted; sec++) { SHOP_TICK(60); lifted = tank.sh_mode == SH_DRIFT; }
+                if (!lifted) { printf("FAIL: it never lifted off the sand to look around\n"); return 1; }
+                SHOP_TICK(60 * 20);
+                if (tank.sh_mode != SH_PERCH || tank.sh_akind != SH_ANCHOR_SAND || fabsf(tank.sh_x - sx1) < 1) { printf("FAIL: after the look it did not settle on a new spot of sand (mode %d kind %d x %.0f -> %.0f)\n", tank.sh_mode, tank.sh_akind, sx1, tank.sh_x); return 1; }
+                memcpy(tank.veg_h, was_h, sizeof was_h); tank_veg_sync(&tank);
+                secs2 = 0; while (!(tank.sh_mode == SH_PERCH && tank.sh_akind == SH_ANCHOR_BLADE) && secs2 < 150) { SHOP_TICK(60); secs2++; }
+                if (tank.sh_mode != SH_PERCH || tank.sh_akind != SH_ANCHOR_BLADE) { printf("FAIL: the grass back, it did not take a blade (mode %d kind %d)\n", tank.sh_mode, tank.sh_akind); return 1; }
+                printf("selftest-shop: seahorse: the grass back -> a blade again after %d s\n", secs2);
+            }
+            /* its SNACKS (Strato 10-15): it never chases a pellet, but one that
+               drifts within reach of its snout is eaten - the first in 10 min
+               pays 10, the rest in that window nothing; after the cooldown the
+               next pays again; the snack is no fish meal */
+            {
+                #define TEST_PELLET(k, px, py) do { tank.food[k].alive = true; tank.food[k].x = (px); tank.food[k].y = (py); tank.food[k].age = 0; \
+                                                    tank.food[k].from_player = true; tank.food[k].floor_s = 0; tank.food[k].nibbled = 0; } while (0)   /* a clean slot: a reused one kept its old floor time and expired at once */
+                float mx = tank.sh_x + 16 * tank.sh_facing, my = tank.sh_y - 21;
+                int meals0 = tank.player_feedings, bal0 = tank.sd_balance, eaten0 = tank.sh_eaten;
+                if (tank.tank_ms_bits & TMS_SEAHORSE_FED) { printf("FAIL: the seahorse-fed badge before any snack\n"); return 1; }
+                for (int i = 0; i < MAX_FOOD; i++) tank.food[i].alive = false;
+                for (int i = 0; i < tank.n_fish; i++) { tank.fish[i].x = TANK_FX1 - 30; tank.fish[i].y = 60; tank.fish[i].hunger = 0; }   /* the fish parked, full: the pellets are its */
+                float far_x = tank.sh_x - 120 * tank.sh_facing;
+                TEST_PELLET(0, far_x, my);                                   /* out of reach: it does not go */
+                float sx0 = tank.sh_x; SHOP_TICK(60 * 3);
+                if (tank.sh_eaten != eaten0 || fabsf(tank.sh_x - sx0) > 2) { printf("FAIL: the seahorse went for a pellet (%d eaten, moved %.0f)\n", (int)(tank.sh_eaten - eaten0), fabsf(tank.sh_x - sx0)); return 1; }
+                if (!tank.food[0].alive) { printf("FAIL: the far pellet vanished on its own\n"); return 1; }
+                tank.food[0].alive = false;
+                TEST_PELLET(1, mx + 4, my - 3);                              /* within reach */
+                SHOP_TICK(4);
+                if (tank.sh_snap < 0 || tank.food[1].alive == false) { printf("FAIL: no snatch under way for a pellet in reach (snap %.2f alive %d)\n", tank.sh_snap, tank.food[1].alive); return 1; }
+                if (tank_seahorse_jut(&tank) <= 0.5f) { printf("FAIL: the head did not jut (%.1f)\n", tank_seahorse_jut(&tank)); return 1; }
+                SHOP_TICK(30);
+                if (tank.food[1].alive || tank.sh_eaten != eaten0 + 1) { printf("FAIL: a pellet in reach was not snapped (alive %d, eaten %d)\n", tank.food[1].alive, (int)(tank.sh_eaten - eaten0)); return 1; }
+                if (tank.sh_snap >= 0) { printf("FAIL: the snatch did not end (%.2f)\n", tank.sh_snap); return 1; }
+                SHOP_TICK(2);
+                if (tank.sd_balance != bal0 + SD_SNACK) { printf("FAIL: the snack paid %d, want %d\n", tank.sd_balance - bal0, SD_SNACK); return 1; }
+                if (!(tank.tank_ms_bits & TMS_SEAHORSE_FED)) { printf("FAIL: the first snack did not earn the FIRST SEAHORSE FEEDING badge\n"); return 1; }
+                if (tank.player_feedings != meals0) { printf("FAIL: the snack counted as a fish meal\n"); return 1; }
+                SHOP_TICK(60 + 6);                                           /* its rest after the bite */
+                int fac0 = tank.sh_facing;                                   /* a second, on its OTHER side: it turns to it, then snatches */
+                TEST_PELLET(2, tank.sh_x - 12 * fac0, my);
+                SHOP_TICK(6);
+                if (tank.sh_facing != -fac0) { printf("FAIL: it did not turn to a pellet behind it (facing %d)\n", tank.sh_facing); return 1; }
+                SHOP_TICK(50);
+                if (tank.food[2].alive || tank.sh_eaten != eaten0 + 2) { printf("FAIL: the second pellet was not eaten after the turn\n"); return 1; }
+                if (tank.sd_balance != bal0 + SD_SNACK) { printf("FAIL: the second snack paid inside the cooldown (%d)\n", tank.sd_balance - bal0 - SD_SNACK); return 1; }
+                float cool0 = tank.sh_snack_cool;
+                tank_tick_sleep(&tank, SH_SNACK_COOL_S + 5);                  /* the cooldown runs through sleep too */
+                if (tank.sh_snack_cool > 0) { printf("FAIL: the cooldown did not run in sleep (%.0f left of %.0f)\n", tank.sh_snack_cool, cool0); return 1; }
+                mx = tank.sh_x + 16 * tank.sh_facing; my = tank.sh_y - 21;
+                TEST_PELLET(3, mx, my);
+                SHOP_TICK(34);
+                /* a CLUSTER drifting past: one bite, a rest, then the next - never a jut that takes nothing */
+                SHOP_TICK(60 * 2);
+                int e_before = tank.sh_eaten, juts = 0; bool up = false;
+                for (int k = 4; k < 7; k++) TEST_PELLET(k, mx + (k - 5) * 5, my + (k - 5) * 3);
+                for (int i = 0; i < 60 * 4; i++) { SHOP_TICK(1); bool now = tank.sh_snap >= 0; if (now && !up) juts++; up = now; }
+                int bites = tank.sh_eaten - e_before;
+                if (bites < 1 || juts != bites) { printf("FAIL: a cluster of 3: %d juts for %d bites (want one each)\n", juts, bites); return 1; }
+                if (bites > 3) { printf("FAIL: %d bites from 3 pellets\n", bites); return 1; }
+                printf("selftest-shop: seahorse: a cluster of 3 pellets -> %d bites, %d juts (one each, a rest between)\n", bites, juts);
+                if (tank.sd_balance != bal0 + 2 * SD_SNACK) { printf("FAIL: after the cooldown the snack did not pay (%d)\n", tank.sd_balance - bal0); return 1; }
+                printf("selftest-shop: seahorse: snacks - a far pellet ignored, one in reach snatched with the head out (+%d, no meal), a second behind it: a turn then eaten for nothing, after %.0f min of cooldown the next pays again; %d snapped\n",
+                       SD_SNACK, SH_SNACK_COOL_S / 60, (int)(tank.sh_eaten - eaten0));
+                #undef TEST_PELLET
+            }
+            /* its tap and its card; the seahorse itself drawn in the tank */
+            float cx = tank.sh_x + 4 * tank.sh_facing, cy = tank.sh_y - SH_BODY_UP;
+            if (!tank_seahorse_hit(&tank, cx, cy) || !tank_seahorse_hit(&tank, cx + 15, cy - 15) || tank_seahorse_hit(&tank, cx + 60, cy)) { printf("FAIL: the seahorse's hit test\n"); return 1; }
+            uint16_t *cfb = malloc(TANK_W * TANK_H * 2);
+            render_tank(&tank, cfb, TANK_W);
+            int orange = 0;
+            for (int y = (int)tank.sh_y - 40; y <= (int)tank.sh_y + 6; y++) for (int x = (int)tank.sh_x - 24; x <= (int)tank.sh_x + 24; x++) {
+                if (x < 0 || y < 0 || x >= TANK_W || y >= TANK_H) continue;
+                uint16_t v = cfb[y * TANK_W + x]; int r = (v >> 11) & 31, g = (v >> 5) & 63, b = v & 31;
+                orange += r >= 16 && g >= 14 && b <= 10 && r > b * 2;
+            }
+            if (orange < 120) { printf("FAIL: no seahorse drawn at %.0f,%.0f (%d orange px)\n", tank.sh_x, tank.sh_y, orange); return 1; }
+            render_stats_card(&tank, RENDER_CARD_SEAHORSE, cfb, TANK_W);
+            const int cx0 = (TANK_W - SEAHORSE_CARD_W) / 2, cy0 = (TANK_H - SEAHORSE_CARD_H) / 2;
+            int lit = 0; for (int y = cy0; y < cy0 + SEAHORSE_CARD_H; y += 4) for (int x = cx0; x < cx0 + SEAHORSE_CARD_W; x += 4) lit += cfb[y * TANK_W + x] == 0xffff;
+            if (lit < 20) { printf("FAIL: the seahorse's card drew no white text (%d)\n", lit); return 1; }
+            free(cfb);
+            printf("selftest-shop: seahorse card: the tap hits, the card draws; %d orange px in the tank\n", orange);
+            memcpy(&tank, was, sizeof(tank_t)); free(was);           /* out again: the tests below count the tank as it was */
+            tank.sd_balance = 0; want = 0;
+        }
         float veg_was[VEG_BEDS_MAX][VEG_FRONDS_MAX]; memcpy(veg_was, tank.veg_h, sizeof veg_was);   /* put back after: the tests below place the plant among the beds */
         for (int b = 0; b < VEG_BEDS; b++) tank_veg_set(&tank, b, 0.45f);
         tank_veg_set(&tank, 3, 0.70f);                        /* the sword plant tall: not its food */
@@ -3101,7 +3566,7 @@ static int selftest_shop(void) {
         float h13 = tank.veg_h[1][3];
         printf("selftest-shop: urchin: from x %.0f to the tall frond at %.0f (now x %.0f): 0.80 -> %.3f, %.0f px eaten; the sword plant %.3f -> %.3f\n",
                ux0, tf0, tank.urchin_x, h13, tank.urchin_grazed_px, sword0, tank.veg_h[3][1]);
-        if (h13 > 0.78f || h13 < 0.74f) { printf("FAIL: the urchin did not eat a bite of the tallest frond\n"); return 1; }
+        if (h13 > 0.78f || h13 < 0.73f) { printf("FAIL: the urchin did not eat a bite of the tallest frond\n"); return 1; }   /* a bite + the walk's appetite (0.50 an hour, 0.3.6: ~0.737) */
         if (tank.veg_h[3][1] < sword0 - 1e-4f) { printf("FAIL: the urchin ate the sword plant\n"); return 1; }
         if (tank.trims != trims0 || tank.trim_px != tpx0) { printf("FAIL: the urchin's grazing counted as the keeper's trimming\n"); return 1; }
         if (tank.urchin_grazed_px < 10) { printf("FAIL: the urchin's tally %.0f px\n", tank.urchin_grazed_px); return 1; }
@@ -3199,7 +3664,7 @@ static int selftest_shop(void) {
            walls; BEHIND the fish and the grass pass in front of it; the spot and
            the depth survive a save */
         {
-            if (SD_ITEM_COUNT != 7 || SD_ITEMS[2].bit != SD_ITEM_CASTLE || SD_ITEMS[2].price != SD_PRICE_CASTLE) { printf("FAIL: the castle is not the third item\n"); return 1; }
+            if (SD_ITEM_COUNT != 9 || SD_ITEMS[2].bit != SD_ITEM_CASTLE || SD_ITEMS[2].price != SD_PRICE_CASTLE) { printf("FAIL: the castle is not the third item\n"); return 1; }
             if (!tank_decor_placeable(2) || tank_decor_z_count(2) != 2 || tank_decor_z_at(2, 0) != DECOR_Z_BACK || tank_decor_z_at(2, 1) != DECOR_Z_FRONT
                 || tank_decor_z_index(2, DECOR_Z_FRONT) != 1 || tank_decor_z_index(2, DECOR_Z_BACK) != 0) { printf("FAIL: the castle's depths\n"); return 1; }
             tank.sd_balance = SD_PRICE_CASTLE - 1;
@@ -3242,20 +3707,26 @@ static int selftest_shop(void) {
             f->x = wx; f->y = wy; render_tank(&tank, fb, TANK_W); bool on_wall_behind = fb[wy * TANK_W + wx] != bare_wb;
             park_fish(f);
             /* the grass: bed 2's fronds (x 284..368 in the rectangle) cross the walls; grown vs
-               stubble changes the wall band only when the castle is BEHIND */
-            int diff[2];
+               stubble changes the gate wall's band only when the castle is BEHIND - and
+               the arch's band either way (2026-10-17: the arch is open, the grass behind
+               the castle shows through it) */
+            int diff[2], arch[2];
             for (int k = 0; k < 2; k++) {
                 tank_decor_set(&tank, 2, 300, k ? DECOR_Z_FRONT : DECOR_Z_BACK);
                 static uint16_t fa[TANK_W * TANK_H];
                 tank_veg_set(&tank, 2, VEG_NUB); render_tank(&tank, fb, TANK_W); render_tank(&tank, fb, TANK_W); memcpy(fa, fb, sizeof fa);
                 tank_veg_set(&tank, 2, 0.6f);    render_tank(&tank, fb, TANK_W); render_tank(&tank, fb, TANK_W);
-                diff[k] = 0;
-                for (int y = FY - 50; y <= FY - 16; y++) for (int x = cx - 30; x <= cx + 50; x++) diff[k] += fa[y * TANK_W + x] != fb[y * TANK_W + x];
+                diff[k] = arch[k] = 0;
+                for (int y = FY - 50; y <= FY - 16; y++) {
+                    for (int x = cx - 60; x <= cx + 50; x++)                     /* the left tower, the gate wall either side of the arch's trim */
+                        if (x < cx - 32 || x > cx + 32) diff[k] += fa[y * TANK_W + x] != fb[y * TANK_W + x];
+                    for (int x = cx - 20; x <= cx + 20; x++) arch[k] += fa[y * TANK_W + x] != fb[y * TANK_W + x];   /* well inside the arch */
+                }
             }
             f->x = fx0; f->y = fy0; f->heading = fh0; tank_fish_face(f);
-            printf("selftest-shop: castle: IN FRONT a fish in the arch shows %d, behind the gate wall %d; BEHIND on the wall %d; grass over the walls BEHIND %d px, IN FRONT %d px\n",
-                   in_arch, on_wall, on_wall_behind, diff[0], diff[1]);
-            if (!in_arch || on_wall || !on_wall_behind || diff[0] == 0 || diff[1] != 0) { printf("FAIL: the castle's depths did not order the fish and the grass\n"); return 1; }
+            printf("selftest-shop: castle: IN FRONT a fish in the arch shows %d, behind the gate wall %d; BEHIND on the wall %d; grass over the gate wall BEHIND %d px, IN FRONT %d px; in the arch BEHIND %d px, IN FRONT %d px\n",
+                   in_arch, on_wall, on_wall_behind, diff[0], diff[1], arch[0], arch[1]);
+            if (!in_arch || on_wall || !on_wall_behind || (diff[0] == 0 && arch[0] == 0) || diff[1] != 0 || (arch[0] > 0 && arch[1] == 0)) { printf("FAIL: the castle's depths did not order the fish and the grass\n"); return 1; }
             tank_decor_set(&tank, 2, 260, DECOR_Z_BACK); progression_save(&tank);
             { int nf = tank.n_fish; tank_init(&tank, 4242); progression_boot(&tank); tank.trickle_off = true;
               if (tank.n_fish != nf || !(tank.sd_unlocks & SD_ITEM_CASTLE) || fabsf(tank_decor_x(&tank, 2) - 260) > 0.01f || tank_decor_z(&tank, 2) != DECOR_Z_BACK) {
@@ -3374,7 +3845,9 @@ static int selftest_shop(void) {
         tank.sd_unlocks &= ~SD_ITEM_CLUSTER; tank.sd_balance = SD_PRICE_CLUSTER;
         int r = shop_tap(SHOP_BTN_X, SHOP_BTN_Y);
         if (r != SHOP_TAP_BUY + 4) { printf("FAIL: UNLOCK in the cluster's modal returned %d\n", r); return 1; }
-        if (shop_tap(SHOP_ROW_X, SHOP_ROW_Y(3)) != SHOP_TAP_NONE) { printf("FAIL: page 2 has a fourth row (the cluster, the shrimp and the urchin only)\n"); return 1; }
+        if (shop_tap(SHOP_ROW_X, SHOP_ROW_Y(3)) != SHOP_TAP_KEPT) { printf("FAIL: page 2 row 3 (the seahorse, 0.3.6) did not open a modal\n"); return 1; }
+        render_shop(&tank, fb, TANK_W);
+        shop_tap(SHOP_ROW_X, SHOP_ROW_Y(0));                           /* (any tap closes its modal) */
         if (shop_tap(SHOP_ROW_X, SHOP_ROW_Y(2)) != SHOP_TAP_KEPT) { printf("FAIL: page 2 row 2 (the urchin) did not open a modal\n"); return 1; }
         render_shop(&tank, fb, TANK_W);
         shop_tap(SHOP_ROW_X, SHOP_ROW_Y(0));                           /* (any tap closes its modal) */
@@ -3748,6 +4221,205 @@ static int selftest_shop(void) {
         if (setup_active() || (tank.sd_unlocks & SD_ITEM_CASTLE) || tank.sd_balance != 30) { printf("FAIL: the page's second SELL (balance %d)\n", tank.sd_balance); return 1; }
         progression_sd_take_award();
         printf("selftest-shop: selling back: the castle for 30 (armed, then sold; earnings untouched), bought again at %d, MOVE beside SELL, the snail unsellable, the hold's hit test, the page's SELL\n", SD_PRICE_CASTLE);
+    }
+    /* the pumpkin lantern (0.3.6): item 9 at 75, sold while this build says
+       so (SD_PUMPKIN_IN_SHOP - no date check), placeable BEHIND / IN FRONT,
+       kept once bought; with the light off it lights a fish beside it */
+    {
+        static uint16_t fb[TANK_W * TANK_H];
+        render_set_scene_cache(scene_buf); render_set_vignette_cache(vig_buf); render_set_dirty_mask(dirty_buf);   /* the board's path: the light needs the scene cache */
+        if (SD_ITEMS[8].bit != SD_ITEM_PUMPKIN || SD_ITEMS[8].price != SD_PRICE_PUMPKIN || SD_PRICE_PUMPKIN != 75) { printf("FAIL: the pumpkin is not the ninth item at 75\n"); return 1; }
+        tank.sd_unlocks &= ~SD_ITEM_PUMPKIN; tank.sd_balance = 100;
+        if (progression_pumpkin_offered(&tank) != (SD_PUMPKIN_IN_SHOP != 0)) { printf("FAIL: the shop's pumpkin row does not follow SD_PUMPKIN_IN_SHOP\n"); return 1; }
+        tank.sd_unlocks |= SD_ITEM_PUMPKIN; tank.sd_balance = 100;   /* (bought by hand, so the rest runs whatever the switch says) */
+        if (progression_buy(&tank, 8) || tank.sd_balance != 100) { printf("FAIL: the pumpkin sold twice\n"); return 1; }
+        tank.sd_unlocks &= ~SD_ITEM_PUMPKIN;
+        if (SD_PUMPKIN_IN_SHOP) { if (!progression_buy(&tank, 8) || tank.sd_balance != 25) { printf("FAIL: the pumpkin's sale\n"); return 1; } }
+        else { if (progression_buy(&tank, 8)) { printf("FAIL: the pumpkin sold with SD_PUMPKIN_IN_SHOP 0\n"); return 1; } tank.sd_unlocks |= SD_ITEM_PUMPKIN; tank_pumpkin_place(&tank); }
+        if (!(tank.sd_unlocks & SD_ITEM_PUMPKIN) || !tank_decor_placeable(8) || tank_decor_z(&tank, 8) != DECOR_Z_BACK || fabsf(tank_decor_x(&tank, 8) - PUMPKIN_X_DEFAULT) > 0.01f) { printf("FAIL: the pumpkin's spot after the sale\n"); return 1; }
+        /* the light: a fish beside it, the tank light off, with and without the lantern */
+        fish_t *f = &tank.fish[0]; float fx0 = f->x, fy0 = f->y;
+        int sx = (int)tank_decor_x(&tank, 8) + 70, sy = TANK_BOT - 40;
+        f->x = (float)sx; f->y = (float)sy; f->heading = 0; tank_fish_face(f);
+        bool night0 = tank.night; tank.night = true;
+        uint32_t keep = tank.sd_unlocks, lit = 0, dark = 0;
+        for (int pass = 0; pass < 2; pass++) {
+            if (pass) tank.sd_unlocks = keep; else tank.sd_unlocks = keep & ~SD_ITEM_PUMPKIN;
+            render_tank(&tank, fb, TANK_W); render_tank(&tank, fb, TANK_W);
+            uint32_t r = 0; for (int dx = -6; dx <= 6; dx++) r += fb[sy * TANK_W + sx + dx] >> 11;
+            if (pass) lit = r; else dark = r;
+        }
+        tank.night = night0; f->x = fx0; f->y = fy0;
+        if (lit <= dark + 13) { printf("FAIL: the lantern did not light the fish beside it (red %u lit, %u without)\n", lit, dark); return 1; }
+        /* IN FRONT, saved; still on the shop's list for its keeper; sold back for 15 */
+        tank_decor_set(&tank, 8, 200, DECOR_Z_FRONT);
+        progression_save(&tank);
+        { int nf = tank.n_fish; tank_init(&tank, 4242); progression_boot(&tank); tank.trickle_off = true;
+          if (tank.n_fish != nf || !(tank.sd_unlocks & SD_ITEM_PUMPKIN) || fabsf(tank_decor_x(&tank, 8) - 200) > 0.01f || tank_decor_z(&tank, 8) != DECOR_Z_FRONT) {
+              printf("FAIL: the pumpkin's spot did not survive the save (x %.0f, z %d)\n", tank_decor_x(&tank, 8), tank_decor_z(&tank, 8)); return 1; } }
+        render_tank(&tank, fb, TANK_W);
+        /* a coral IN FRONT over a pumpkin BEHIND (2026-10-17, Strato's 1.8: "the coral
+           is showing only a piece of it toward the top of the pumpkin"): the coral's
+           trunk over the lantern's face is the coral's, lantern shown or hidden */
+        { tank_t keep = tank; static uint16_t fs[TANK_W * TANK_H], fh[TANK_W * TANK_H];
+          tank.night = false; memset(tank.algae, 0, sizeof tank.algae);
+          tank_decor_set(&tank, 8, tank_decor_x(&tank, 8), DECOR_Z_BACK);
+          tank.sd_unlocks |= SD_ITEM_CORAL; tank_coral_place(&tank); tank.coral_growth = 1.0f;
+          tank_decor_set(&tank, 3, tank_decor_x(&tank, 8), DECOR_Z_FRONT);
+          int cx = (int)tank_decor_x(&tank, 3), cy = TANK_BOT - 24;
+          f->x = TANK_FX0 + 60; f->y = 60; tank_glass_clamp(&f->x, &f->y, 40);
+          render_set_pumpkin_hidden(false); for (int k = 0; k < 3; k++) render_tank(&tank, fs, TANK_W);
+          render_set_pumpkin_hidden(true);  for (int k = 0; k < 3; k++) render_tank(&tank, fh, TANK_W);
+          render_set_pumpkin_hidden(false);
+          int bad = 0, n = 0;
+          for (int y = cy - 6; y <= cy + 6; y++) for (int x = cx - 4; x <= cx + 4; x++) { n++; bad += fs[y * TANK_W + x] != fh[y * TANK_W + x]; }
+          if (bad) { printf("FAIL: a coral IN FRONT over the lantern: %d of %d trunk pixels change with the lantern shown\n", bad, n); return 1; }
+          printf("selftest-shop: a coral IN FRONT over the lantern BEHIND: its trunk's %d pixels are the coral's with the lantern shown or hidden\n", n);
+          tank = keep; render_tank(&tank, fb, TANK_W); }
+        /* under a castle IN FRONT (2026-10-17, Strato's 1.8): the castle's far-right
+           tower (cx + 56..86) over the pumpkin's face - the castle shows there,
+           pumpkin or no pumpkin, fish behind the wall or not; without the castle
+           the pumpkin's face shows */
+        { uint32_t unl = tank.sd_unlocks; bool night0 = tank.night; float snx = tank.snail_x;
+          tank.sd_unlocks |= SD_ITEM_CASTLE; tank_castle_place(&tank); tank_decor_set(&tank, 2, TANK_FLOOR_X(180), DECOR_Z_FRONT);
+          tank_decor_set(&tank, 8, tank_decor_x(&tank, 2) + 71, DECOR_Z_BACK);
+          int ccx = (int)tank_decor_x(&tank, 2), px = (int)tank_decor_x(&tank, 8), py = TANK_BOT - 29;   /* the face's middle row */
+          if (px < ccx + 60 || px > ccx + 82) { printf("FAIL: the test's tower does not cover the pumpkin's face (castle %d, pumpkin %d)\n", ccx, px); return 1; }
+          tank.night = false; memset(tank.algae, 0, sizeof tank.algae); tank.snail_x = TANK_FX0 + 40;
+          f->x = TANK_FX0 + 60; f->y = 60; tank_glass_clamp(&f->x, &f->y, 40);
+          uint16_t seen[4];
+          for (int k = 0; k < 4; k++) {                 /* 0: as is; 1: pumpkin hidden; 2: the fish behind the tower; 3: no castle */
+              render_set_pumpkin_hidden(k == 1);
+              if (k == 2) { f->x = (float)px; f->y = (float)py; tank_fish_face(f); }
+              if (k == 3) { tank.sd_unlocks &= ~SD_ITEM_CASTLE; f->x = TANK_FX0 + 60; f->y = 60; tank_glass_clamp(&f->x, &f->y, 40); }
+              render_tank(&tank, fb, TANK_W); render_tank(&tank, fb, TANK_W);
+              seen[k] = fb[py * TANK_W + px];
+          }
+          render_set_pumpkin_hidden(false);
+          if (seen[0] != seen[1] || seen[0] != seen[2]) { printf("FAIL: under a castle IN FRONT the pumpkin shows through (%04x, hidden %04x, a fish behind the tower %04x)\n", seen[0], seen[1], seen[2]); return 1; }
+          if (seen[3] == seen[0]) { printf("FAIL: the control: no castle, the same pixel (%04x)\n", seen[3]); return 1; }
+          /* the arch is open: the sword plant grown behind it shows through the
+             castle exactly as without the castle (by day; the fish parked away) */
+          { tank_t keep = tank; tank.night = false; const int FY = TANK_BOT - 16;
+            tank.sd_unlocks |= SD_ITEM_PLANT | SD_ITEM_CASTLE; tank_plant_place(&tank); tank_veg_set(&tank, 3, 0.7f);
+            tank_decor_set(&tank, 0, (float)ccx, DECOR_Z_MIDDLE);
+            static uint16_t fa[TANK_W * TANK_H], fc[TANK_W * TANK_H];
+            tank.sd_unlocks &= ~SD_ITEM_CASTLE; render_tank(&tank, fa, TANK_W); render_tank(&tank, fa, TANK_W);
+            tank.sd_unlocks |= SD_ITEM_CASTLE;  render_tank(&tank, fc, TANK_W); render_tank(&tank, fc, TANK_W);
+            int shaded = 0, bad = 0, leaves = 0; long ga = 0, gc = 0;
+            for (int y = FY - 44; y <= FY - 12; y++)
+                for (int x = ccx - 18; x <= ccx + 18; x++) {       /* well inside the arch */
+                    uint16_t a = fa[y * TANK_W + x], b = fc[y * TANK_W + x];
+                    int g = (a >> 5) & 63, r = a >> 11;
+                    if (g < 24 || g < r * 2) continue;               /* a leaf's green, not water */
+                    leaves++; ga += g; gc += (b >> 5) & 63;
+                    /* through the castle the leaf is the same pixel, darkened (the arch's shade), still green */
+                    int bg = (b >> 5) & 63, br = b >> 11, bb = b & 31;
+                    if (bg <= g && br <= r && bb <= (a & 31) && bg >= 12 && bg > br * 2) shaded++; else bad++;
+                }
+            if (leaves < 60 || bad * 10 > leaves || gc * 100 > ga * 85 || gc * 100 < ga * 45) { printf("FAIL: the plant behind the arch: %d leaf pixels, %d shaded green through the castle, %d not; green %ld -> %ld\n", leaves, shaded, bad, ga, gc); return 1; }
+            printf("selftest-shop: the arch is open and shaded: %d of %d of the plant's pixels behind it show through the castle, darkened (green %d%%)\n", shaded, leaves, (int)(gc * 100 / ga));
+            tank = keep; render_tank(&tank, fb, TANK_W); }
+          /* and at night the castle is in the light's way: the tower's stone over
+             the lantern takes a fraction of what open water the same distance
+             from the light gets, and the gate wall a fraction of what the arch's
+             opening under it lets through */
+          tank.sd_unlocks |= SD_ITEM_CASTLE; tank.night = true;
+          const int FY = TANK_BOT - 16;
+          int pc = -(px - ccx) * 10 / 80;                                    /* the gate's pool on the sand, 10 px down, leans away from the lantern */
+          const int P[6][2] = { { px - 13, FY - 66 }, { px + 55, FY - 13 }, { ccx, FY - 6 }, { ccx, FY - 56 }, { px, FY + 10 }, { ccx + pc, FY + 10 } };
+          /* the tower's shoulder and open water 55 px from the light either way; the arch and the gate wall ~70-80 px from it;
+             the sand under the tower (dark) and the sand in the gate's pool (lit) */
+          int gain[6] = { 0, 0, 0, 0, 0, 0 };
+          for (int k = 0; k < 2; k++) {
+              render_set_pumpkin_hidden(k == 1);
+              render_tank(&tank, fb, TANK_W); render_tank(&tank, fb, TANK_W);
+              for (int j = 0; j < 6; j++) { int r = fb[P[j][1] * TANK_W + P[j][0]] >> 11; gain[j] += k ? -r : r; }
+          }
+          render_set_pumpkin_hidden(false); tank.night = false;
+          int tw = gain[0], ww = gain[1], aw = gain[2], gw = gain[3], sw = gain[4], pw = gain[5];
+          /* the sword plant grown beside the lantern, no castle: its leaves are
+             backlit (a fraction of the gain of the water round them) and the sand
+             under the plant is in its shadow, the sand under the lantern lit */
+          { tank_t keep2 = tank; static uint16_t f0[TANK_W * TANK_H], f1[TANK_W * TANK_H], f2[TANK_W * TANK_H];
+            tank.sd_unlocks &= ~SD_ITEM_CASTLE; tank.sd_unlocks |= SD_ITEM_PLANT; tank_plant_place(&tank); tank_veg_set(&tank, 3, 0.7f);
+            int plx = px + 60; tank_decor_set(&tank, 0, (float)plx, DECOR_Z_MIDDLE); plx = (int)tank_decor_x(&tank, 0);
+            tank.night = true; memset(tank.algae, 0, sizeof tank.algae);
+            tank.sd_unlocks &= ~SD_ITEM_PLANT; render_tank(&tank, f0, TANK_W); render_tank(&tank, f0, TANK_W);   /* no plant: where its leaves are */
+            tank.sd_unlocks |= SD_ITEM_PLANT;  render_tank(&tank, f1, TANK_W); render_tank(&tank, f1, TANK_W);   /* the plant, lit from behind */
+            render_set_pumpkin_hidden(true);   render_tank(&tank, f2, TANK_W); render_tank(&tank, f2, TANK_W);   /* the plant, no lantern */
+            render_set_pumpkin_hidden(false);
+            long leaf = 0, water = 0; int nl = 0, nw = 0;
+            for (int y = TANK_BOT - 70; y <= TANK_BOT - 30; y++)
+                for (int x = plx - 24; x <= plx + 24; x++) {
+                    int i = y * TANK_W + x, g = (f1[i] - f2[i]) ? (int)(f1[i] >> 11) - (int)(f2[i] >> 11) : 0;
+                    if (f1[i] != f0[i] && f2[i] != f0[i]) { leaf += g; nl++; } else if (f1[i] != f2[i]) { water += g; nw++; }
+                }
+            int under_plant = (int)(f1[(TANK_BOT - 6) * TANK_W + plx] >> 11) - (int)(f2[(TANK_BOT - 6) * TANK_W + plx] >> 11);
+            int under_lamp = (int)(f1[(TANK_BOT - 6) * TANK_W + px] >> 11) - (int)(f2[(TANK_BOT - 6) * TANK_W + px] >> 11);
+            if (nl < 40 || nw < 40 || leaf * nw * 2 > water * nl || under_lamp < 3 || under_plant * 2 > under_lamp) {
+                printf("FAIL: the plant in front of the lantern: %d leaf px gain %.2f red, %d water px gain %.2f; the sand under the plant +%d, under the lantern +%d\n",
+                       nl, nl ? (float)leaf / nl : 0, nw, nw ? (float)water / nw : 0, under_plant, under_lamp); return 1; }
+            printf("selftest-shop: the plant in front of the lantern at night: its leaves gain %.2f red (backlit) where the water round them gains %.2f; the sand under it +%d, under the lantern +%d\n",
+                   (float)leaf / nl, (float)water / nw, under_plant, under_lamp);
+            tank = keep2; render_tank(&tank, fb, TANK_W); }
+          if (ww < 6 || tw * 2 > ww || aw < 4 || gw * 2 >= aw || sw != 0 || pw < 3) { printf("FAIL: the castle's shadow: red gained - tower %d vs the water above %d, gate wall %d vs the arch %d, the sand under the tower %d, the gate's pool %d\n", tw, ww, gw, aw, sw, pw); return 1; }
+          printf("selftest-shop: pumpkin behind a castle IN FRONT at night: red gained - the tower's stone %d vs open water as far from the light %d, the gate wall %d vs the arch's opening %d; the sand under the tower %d, the gate's pool on the sand %d\n", tw, ww, gw, aw, sw, pw);
+          printf("selftest-shop: pumpkin behind a castle IN FRONT: the tower's pixel is the castle's (%04x) with or without the pumpkin and with a fish behind the wall; %04x without the castle\n", seen[0], seen[3]);
+          tank.sd_unlocks = unl; tank.night = night0; tank.snail_x = snx; tank_decor_set(&tank, 8, 200, DECOR_Z_FRONT); f->x = fx0; f->y = fy0; }
+        if (!progression_pumpkin_offered(&tank)) { printf("FAIL: an owned pumpkin left the shop\n"); return 1; }
+        int bal = tank.sd_balance;
+        if (!progression_sell(&tank, 8) || tank.sd_balance != bal + 15 || (tank.sd_unlocks & SD_ITEM_PUMPKIN) || tank_decor_z(&tank, 8) != DECOR_Z_BACK) { printf("FAIL: the pumpkin's sale back\n"); return 1; }
+        progression_sd_take_award();
+        printf("selftest-shop: pumpkin: %s, 75, lights a fish beside it at night (red %u vs %u), IN FRONT at x 200 saved, kept by its keeper, sold back for 15\n",
+               SD_PUMPKIN_IN_SHOP ? "in the shop (SD_PUMPKIN_IN_SHOP)" : "out of the shop (owned ones stay)", lit, dark);
+    }
+    /* the order of the pieces (2026-10-17): bought later = on top of its
+       depth; the arrows swap neighbours at one depth only; the save keeps it */
+    {
+        tank_t keep = tank; static uint16_t fb[TANK_W * TANK_H];
+        tank.sd_unlocks &= ~(SD_ITEM_CASTLE | SD_ITEM_CORAL | SD_ITEM_CLUSTER | SD_ITEM_PUMPKIN | SD_ITEM_PLANT);
+        memset(tank.decor_rank, 0, sizeof tank.decor_rank); tank.sd_balance = 1000;
+        if (!progression_buy(&tank, 3) || !progression_buy(&tank, 2) || !progression_buy(&tank, 8)) { printf("FAIL: could not buy coral, castle, pumpkin\n"); return 1; }
+        tank_decor_set(&tank, 2, tank_decor_x(&tank, 2), DECOR_Z_FRONT); tank_decor_set(&tank, 3, tank_decor_x(&tank, 3), DECOR_Z_FRONT); tank_decor_set(&tank, 8, tank_decor_x(&tank, 8), DECOR_Z_FRONT);
+        int items[DECOR_SLOTS], n = tank_decor_order(&tank, items);
+        if (n != 3 || items[0] != 3 || items[1] != 2 || items[2] != 8) { printf("FAIL: the buy order (%d: %d %d %d), wanted coral < castle < pumpkin\n", n, items[0], items[1], items[2]); return 1; }
+        if (!tank_decor_above(&tank, 8, 2) || !tank_decor_above(&tank, 2, 3) || tank_decor_above(&tank, 3, 8)) { printf("FAIL: tank_decor_above\n"); return 1; }
+        if (tank_decor_neighbor(&tank, 2, 1) != 8 || tank_decor_neighbor(&tank, 2, -1) != 3 || tank_decor_neighbor(&tank, 8, 1) != -1) { printf("FAIL: the neighbours\n"); return 1; }
+        tank_decor_set(&tank, 3, tank_decor_x(&tank, 3), DECOR_Z_BACK);           /* the coral BEHIND: another depth, no neighbour of the castle's */
+        if (tank_decor_neighbor(&tank, 2, -1) != -1 || tank_decor_neighbor(&tank, 3, 1) != -1 || tank_decor_shift(&tank, 3, 1)) { printf("FAIL: depths mix in the stack\n"); return 1; }
+        if (tank_decor_above(&tank, 3, 8) || !tank_decor_above(&tank, 8, 3)) { printf("FAIL: depth before rank\n"); return 1; }
+        if (!tank_decor_shift(&tank, 2, 1) || tank_decor_neighbor(&tank, 2, 1) != -1 || tank_decor_neighbor(&tank, 2, -1) != 8) { printf("FAIL: BRING FORWARD\n"); return 1; }
+        if (!tank_decor_shift(&tank, 2, -1) || tank_decor_neighbor(&tank, 2, 1) != 8) { printf("FAIL: SEND BACK\n"); return 1; }
+        /* on the glass: the coral and the pumpkin IN FRONT on one spot, the
+           later-bought pumpkin on top; SEND BACK puts the coral over it */
+        { static uint16_t fa[TANK_W * TANK_H], fc[TANK_W * TANK_H];
+          tank_decor_set(&tank, 2, tank_decor_x(&tank, 2), DECOR_Z_BACK);   /* (the castle out of this stack) */
+          tank_decor_set(&tank, 3, tank_decor_x(&tank, 3), DECOR_Z_FRONT);
+          float sx = TANK_FLOOR_X(100); tank_decor_set(&tank, 8, sx, DECOR_Z_FRONT); tank_decor_set(&tank, 3, tank_decor_x(&tank, 8), DECOR_Z_FRONT);
+          tank.coral_growth = 1.0f; tank.night = false; memset(tank.algae, 0, sizeof tank.algae);
+          int qx = (int)tank_decor_x(&tank, 8), qy = TANK_BOT - 24;
+          fish_t *f0 = &tank.fish[0]; float ox = f0->x, oy = f0->y; f0->x = TANK_FX0 + 60; f0->y = 60; tank_glass_clamp(&f0->x, &f0->y, 40);
+          render_set_pumpkin_hidden(true);  for (int k = 0; k < 3; k++) render_tank(&tank, fa, TANK_W);   /* the coral alone */
+          render_set_pumpkin_hidden(false); for (int k = 0; k < 3; k++) render_tank(&tank, fb, TANK_W);   /* the pumpkin over it */
+          if (tank_decor_neighbor(&tank, 8, -1) != 3 || fb[qy * TANK_W + qx] == fa[qy * TANK_W + qx]) { printf("FAIL: the later-bought pumpkin is not over the coral (%04x vs the coral's %04x)\n", fb[qy * TANK_W + qx], fa[qy * TANK_W + qx]); return 1; }
+          if (!tank_decor_shift(&tank, 8, -1)) { printf("FAIL: SEND BACK on the pumpkin\n"); return 1; }
+          for (int k = 0; k < 3; k++) render_tank(&tank, fc, TANK_W);
+          if (fc[qy * TANK_W + qx] != fa[qy * TANK_W + qx]) { printf("FAIL: after SEND BACK the coral is not over the pumpkin (%04x vs %04x)\n", fc[qy * TANK_W + qx], fa[qy * TANK_W + qx]); return 1; }
+          printf("selftest-shop: on the glass: the pumpkin bought after the coral shows over it (%04x, the coral's %04x); SEND BACK and the coral shows (%04x)\n", fb[qy * TANK_W + qx], fa[qy * TANK_W + qx], fc[qy * TANK_W + qx]);
+          tank_decor_shift(&tank, 8, 1); tank_decor_set(&tank, 2, tank_decor_x(&tank, 2), DECOR_Z_FRONT); f0->x = ox; f0->y = oy; }
+        /* the page: the arrows hit, a tap swaps, DONE saves */
+        setup_begin_place(&tank, 2);
+        if (pg_hit(SETUP_ORD_X1 + 10, SETUP_TOP_BTN_Y + 12) != SETUP_HIT_FWD || pg_hit(SETUP_ORD_X0 + 10, SETUP_TOP_BTN_Y + 12) != SETUP_HIT_BCK) { printf("FAIL: the order arrows' hits\n"); return 1; }
+        setup_activate(&tank, SETUP_HIT_FWD);
+        if (tank_decor_neighbor(&tank, 2, 1) != -1) { printf("FAIL: the page's BRING FORWARD\n"); return 1; }
+        render_tank(&tank, fb, TANK_W); render_setup(&tank, fb, TANK_W, 1.0f);
+        setup_activate(&tank, SETUP_HIT_NEXT);
+        uint8_t ranks[DECOR_SLOTS]; memcpy(ranks, tank.decor_rank, sizeof ranks);
+        tank_init(&tank, 4242); progression_boot(&tank); tank.trickle_off = true;
+        if (memcmp(ranks, tank.decor_rank, sizeof ranks) || tank_decor_neighbor(&tank, 2, -1) != 8) { printf("FAIL: the order did not survive the save\n"); return 1; }
+        printf("selftest-shop: the pieces' order: bought coral, castle, pumpkin = that order back to front; neighbours at one depth only; the page's arrows swap; saved\n");
+        tank = keep; progression_save(&tank);
     }
     /* the save carries it all */
     {
@@ -4293,6 +4965,7 @@ int main(int argc, char **argv) {
         if (strcmp(argv[a], "--greedy") == 0) advisor_core_sample = false;
     for (int a = 1; a < argc; a++) {                 /* mode flags may sit anywhere */
         if (strcmp(argv[a], "--hero") == 0 && a + 1 < argc) return hero_shot(argv[a + 1]);
+        if (strcmp(argv[a], "--pumpkin") == 0 && a + 1 < argc) return pumpkin_shot(argv[a + 1]);
         if (strcmp(argv[a], "--clip") == 0 && a + 1 < argc)
             return clip(argv[a + 1], a + 2 < argc ? atoi(argv[a + 2]) : 6);
         if (strcmp(argv[a], "--snapshot") == 0 && a + 1 < argc)
@@ -4370,6 +5043,7 @@ int main(int argc, char **argv) {
     bool idown = false, odown = false;   /* I: the reef cluster (looks cycle); O: its growth */
     bool wdown = false;                  /* W: the shrimp school (grant; again +1; past the last takes it away) */
     bool ydown = false;                  /* Y: the urchin (grant; again takes it away) */
+    bool eightdown = false;              /* 8: the seahorse (grant; again takes it away) - every letter is taken */
     bool held_page = false;              /* this press opened a piece's page by holding on it */
     uint32_t press_ms = 0; int press_x = 0, press_y = 0;
     float press_fx[N_FISH_MAX] = {0}, press_fy[N_FISH_MAX] = {0};
@@ -4537,7 +5211,7 @@ int main(int argc, char **argv) {
                     printf("toolbox: %s\n", tank.tools_locked ? "LOCKED - bare fingers neither wipe nor cut" : "unlocked - bare fingers wipe and cut");
                 }
                 else if (selected_fish >= 0 && selected_fish != RENDER_CARD_SNAIL && selected_fish != RENDER_CARD_SHRIMP && selected_fish != RENDER_CARD_URCHIN
-                         && RENDER_CARD_HIT(press_x, press_y))
+                         && selected_fish != RENDER_CARD_SEAHORSE && RENDER_CARD_HIT(press_x, press_y))
                     milestones_view = true;
                 else if ((selected_fish < 0 || selected_fish >= tank.n_fish) && render_tool_chip_hit(&tank, (float)press_x, (float)press_y)) {
                     tank_set_tool(&tank, TOOL_HAND); printf("toolbox: DONE - back to bare hands\n");
@@ -4548,6 +5222,10 @@ int main(int argc, char **argv) {
                 else if (tank_urchin_hit(&tank, (float)press_x, (float)press_y)) {  /* the urchin: its card (2026-10-02) */
                     selected_fish = selected_fish == RENDER_CARD_URCHIN ? -1 : RENDER_CARD_URCHIN;
                     printf("urchin tapped: card %s (%.0f cm of grass grazed)\n", selected_fish >= 0 ? "up" : "down", tank.urchin_grazed_px / PX_PER_CM);
+                }
+                else if (tank_seahorse_hit(&tank, (float)press_x, (float)press_y)) {  /* the seahorse: its card (0.3.6) */
+                    selected_fish = selected_fish == RENDER_CARD_SEAHORSE ? -1 : RENDER_CARD_SEAHORSE;
+                    printf("seahorse tapped: card %s (%d hitches, %.2f days, +%.2f trust passed on)\n", selected_fish >= 0 ? "up" : "down", (int)tank.sh_hitches, tank_seahorse_days(&tank), tank.sh_trust_passed);
                 }
                 else if (tank_shrimp_hit(&tank, (float)press_x, (float)press_y)) {   /* the shrimp: a tap its card, the third quick tap scares them (2026-09-29) */
                     int taps = tank_shrimp_tap(&tank, (float)press_x, (float)press_y);
@@ -4644,6 +5322,13 @@ int main(int argc, char **argv) {
                    (tank.sd_unlocks & SD_ITEM_URCHIN) ? "in the tank" : "gone", SD_PRICE_URCHIN);
         }
         ydown = k[SDL_SCANCODE_Y];
+        if (k[SDL_SCANCODE_8] && !eightdown) {     /* the seahorse (0.3.6): granted free; again takes it away */
+            if (!(tank.sd_unlocks & SD_ITEM_SEAHORSE)) { tank.sd_unlocks |= SD_ITEM_SEAHORSE; tank_seahorse_place(&tank); }
+            else { tank.sd_unlocks &= ~SD_ITEM_SEAHORSE; tank.sh_x = -1; if (selected_fish == RENDER_CARD_SEAHORSE) selected_fish = -1; }
+            printf("seahorse: %s (free; the shop sells it at %d on page 2; rest the mouse on the glass and it comes to hitch)\n",
+                   (tank.sd_unlocks & SD_ITEM_SEAHORSE) ? "in the tank" : "gone", SD_PRICE_SEAHORSE);
+        }
+        eightdown = k[SDL_SCANCODE_8];
         if (k[SDL_SCANCODE_D] && !ddown) { progression_sd_grant(&tank, 50); printf("+50 sand dollars (%d)\n", tank.sd_balance); }
         ddown = k[SDL_SCANCODE_D];
         if (k[SDL_SCANCODE_U] && !udown) { ui_visible = !ui_visible; }

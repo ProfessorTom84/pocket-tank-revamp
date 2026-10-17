@@ -62,7 +62,8 @@ static inline void stripe_take(void) {
 void display_port_flush_prof(int64_t *wait_us, int64_t *send_us) { *wait_us = s_prof_wait; *send_us = s_prof_send; s_prof_wait = s_prof_send = 0; }
 static i2c_master_bus_handle_t s_i2c;
 static bool s_v2;
-static bool s_round;                            /* the 1.75C: no expander, a round 466 px CO5300 */
+static bool s_round;                            /* the 1.75C: no expander, a round 466 px CO5300 (and the 1.75: s_175) */
+static bool s_175;                              /* the 1.75 / 1.75-B: the round panel, an expander + an ES7210, resets on 39 / 40, an RTC */
 static bool s_watch;                            /* the 2.06 watch: no expander, a 410 x 502 CO5300, an RTC chip */
 static bool s_square;                           /* the 2.16 square: the watch's I2C signature, a CST92xx touch chip, a 480 x 480 CO5300 */
 #define S_MADCTL 0xA0                           /* the panel's orientation: the USB at the FOOT, the picture upright - Waveshare's own
@@ -85,19 +86,21 @@ static uint8_t s_fw[4][4][4];                   /* FIT: [row in group][px in gro
 
 void display_port_set_inverted(bool inverted) { s_inverted = inverted; }
 bool board_is_round(void) { return s_round; }
+bool board_is_175(void) { return s_175; }
 bool board_is_watch(void) { return s_watch; }
 bool board_is_square(void) { return s_square; }
-int  board_pwr_sense_pin(void) { return s_round ? R_PIN_PWR_SENSE : s_watch ? W_PIN_PWR_SENSE : s_square ? S_PIN_PWR_SENSE : -1; }
+int  board_pwr_sense_pin(void) { return s_175 ? -1 : s_round ? R_PIN_PWR_SENSE : s_watch ? W_PIN_PWR_SENSE : s_square ? S_PIN_PWR_SENSE : -1; }
 void display_port_frame_origin(int *px, int *py) { *px = s_fx; *py = s_fy; }
 /* the boards whose resets are GPIOs (the 1.75C, the watch): the pads held through a deep sleep */
 typedef struct { gpio_num_t pin; int level; } held_t;
 static const held_t ROUND_HELD[] = { { R_PIN_LCD_RST, 1 }, { R_PIN_TP_RST, 0 }, { PIN_LCD_CS, 1 } };
 static const held_t WATCH_HELD[] = { { W_PIN_LCD_RST, 1 }, { W_PIN_TP_RST, 0 }, { PIN_LCD_CS, 1 } };
 static const held_t SQUARE_HELD[] = { { S_PIN_LCD_RST, 1 }, { S_PIN_TP_RST, 0 }, { PIN_LCD_CS, 1 } };
+static const held_t B175_HELD[] = { { B_PIN_LCD_RST, 1 }, { B_PIN_TP_RST, 0 }, { PIN_LCD_CS, 1 } };
 #define HELD_N 3
-static const held_t *held_pins(void) { return s_round ? ROUND_HELD : s_watch ? WATCH_HELD : s_square ? SQUARE_HELD : NULL; }
-static gpio_num_t pin_lcd_rst(void) { return s_round ? R_PIN_LCD_RST : s_watch ? W_PIN_LCD_RST : s_square ? S_PIN_LCD_RST : GPIO_NUM_NC; }
-static gpio_num_t pin_tp_rst(void)  { return s_round ? R_PIN_TP_RST : s_square ? S_PIN_TP_RST : W_PIN_TP_RST; }
+static const held_t *held_pins(void) { return s_175 ? B175_HELD : s_round ? ROUND_HELD : s_watch ? WATCH_HELD : s_square ? SQUARE_HELD : NULL; }
+static gpio_num_t pin_lcd_rst(void) { return s_175 ? B_PIN_LCD_RST : s_round ? R_PIN_LCD_RST : s_watch ? W_PIN_LCD_RST : s_square ? S_PIN_LCD_RST : GPIO_NUM_NC; }
+static gpio_num_t pin_tp_rst(void)  { return s_175 ? B_PIN_TP_RST : s_round ? R_PIN_TP_RST : s_square ? S_PIN_TP_RST : W_PIN_TP_RST; }
 static void dcs(uint8_t cmd, const uint8_t *param, size_t n);
 void display_port_deep_sleep_pins(bool tp_awake_high) {
     const held_t *h = held_pins();
@@ -136,7 +139,7 @@ void display_port_deep_standby(void) {
     dcs(0x4F, &on, 1);
     vTaskDelay(pdMS_TO_TICKS(5));
 }
-bool board_has_expander(void) { return s_expander; }
+bool board_has_expander(void) { return s_expander && !s_175; }
 int  display_port_view(void) { return s_view; }
 void display_port_set_view(int view) {
     s_view = view == DISPLAY_VIEW_FULL ? DISPLAY_VIEW_FULL : DISPLAY_VIEW_FIT;
@@ -296,9 +299,10 @@ bool display_port_init(void) {
        is exactly that - battery_port.h): no panel is driven on a guess, the
        pins differ between the boards. */
     s_expander = probe(I2C_ADDR_EXPANDER);
+    s_175 = s_expander && probe(I2C_ADDR_ES7210);    /* the 1.75 / 1.75-B: an expander like the 1.8's AND the 1.75C's ES7210 (the 1.8 has none) */
     bool mic = !s_expander && probe(I2C_ADDR_ES7210);
     s_watch = mic && probe(I2C_ADDR_RTC);            /* the watch has the 1.75C's ES7210 AND an RTC chip (on the always-on RTC rail) */
-    s_round = mic && !s_watch;
+    s_round = s_175 || (mic && !s_watch);
     if (s_watch) {                                   /* ... and so has the 2.16 square: told apart by the touch chip. Its reset let go
                                                         (GPIO 40 - the watch's I2S data line, an output anyway: harmless there) and a
                                                         CST92xx asked for at 0x5A; the watch's FT3168 sits at 0x38 */
@@ -342,8 +346,10 @@ bool display_port_init(void) {
         watch_rails_on();
         s_pw = W_PANEL_W; s_ph = W_PANEL_H;
     } else if (s_round) {
-        ESP_LOGI(TAG, "board: the ROUND 1.75C (CO5300 466x466 / CST9217) - no expander, an ES7210 at 0x%02x", I2C_ADDR_ES7210);
-        for (size_t i = 0; i < HELD_N; i++) gpio_hold_dis(ROUND_HELD[i].pin);   /* a deep sleep's holds end here */
+        if (s_175) ESP_LOGI(TAG, "board: the ROUND 1.75 / 1.75-B (CO5300 466x466 / CST9217) - an expander at 0x%02x AND an ES7210 at 0x%02x; resets on %d / %d (BETA)",
+                            I2C_ADDR_EXPANDER, I2C_ADDR_ES7210, B_PIN_LCD_RST, B_PIN_TP_RST);
+        else ESP_LOGI(TAG, "board: the ROUND 1.75C (CO5300 466x466 / CST9217) - no expander, an ES7210 at 0x%02x", I2C_ADDR_ES7210);
+        for (size_t i = 0; i < HELD_N; i++) gpio_hold_dis(held_pins()[i].pin);   /* a deep sleep's holds end here */
         for (size_t i = 0; i < sizeof ROUND_BUS / sizeof ROUND_BUS[0]; i++) gpio_hold_dis(ROUND_BUS[i]);   /* ... and the QSPI lines' (sleepcfg 8) */
         for (int ky = 0; ky < 4; ky++) for (int kx = 0; kx < 4; kx++) {       /* FIT's area weights: 25ths, as 32nds that sum to 32 */
             int w[4] = { (4 - ky) * (4 - kx), (4 - ky) * (1 + kx), (1 + ky) * (4 - kx), (1 + ky) * (1 + kx) }, sum = 0, big = 0;

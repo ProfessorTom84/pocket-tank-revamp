@@ -42,7 +42,10 @@ bool board_is_round(void);
 void display_port_deep_sleep_pins(bool tp_awake_high);   /* tp_awake_high: the touch chip took its own sleep - hold its reset HIGH, not low */
 void display_port_deep_sleep_bus(void);   /* the round board: the QSPI clock + data lines driven low and held - a powered panel's inputs never float */
 void display_port_deep_standby(void);   /* the CO5300's 4Fh deep standby (~3 uA vs sleep-in's ~135); only a reset ends it */
-bool board_has_expander(void);                  /* the 1.8, positively: its IO expander answered */
+bool board_has_expander(void);                  /* the 1.8, positively: its IO expander answered (and no ES7210 - the 1.75 has both) */
+/* the 1.75 / 1.75-B (BETA, 2026-10-17): the round board with an expander, an
+ * RTC and its resets on 39 / 40. board_is_round() is true on it too. */
+bool board_is_175(void);
 /* the WATCH (Waveshare 2.06, 410 x 502 portrait), with GPIO resets like the
  * round board's. Its own build (TANK_WATCH) is a portrait tank that IS the
  * panel, sent unturned; the rectangle image still runs on it the 1.8's way -

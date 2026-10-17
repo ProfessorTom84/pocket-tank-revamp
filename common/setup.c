@@ -189,6 +189,8 @@ const char *setup_hit_name(int id) {
     if (id == SETUP_HIT_NEXT) return "NEXT";
     if (id == SETUP_HIT_BACK) return "BACK";
     if (id == SETUP_HIT_SELL) return "SELL";
+    if (id == SETUP_HIT_BCK) return "SEND BACK";
+    if (id == SETUP_HIT_FWD) return "BRING FORWARD";
     if (id == SETUP_HIT_UP)   return "up";
     if (id == SETUP_HIT_DOWN) return "down";
     if (id >= SETUP_HIT_SLOT0 && id < SETUP_HIT_SLOT0 + FISH_NAME_MAX) { snprintf(buf, sizeof buf, "slot %d", id - SETUP_HIT_SLOT0); return buf; }
@@ -260,6 +262,8 @@ int setup_hit(float x, float y) {
     if (nav_on_top()) {
         if (in_box(x, y, SETUP_TOP_NEXT_X, SETUP_TOP_BTN_Y, SETUP_TOP_BTN_W, SETUP_BTN_H, m)) return SETUP_HIT_NEXT;
         if (s_place && in_box(x, y, SETUP_TOP_BACK_X, SETUP_TOP_BTN_Y, SETUP_TOP_BTN_W, SETUP_BTN_H, m)) return SETUP_HIT_SELL;
+        if (s_place && in_box(x, y, SETUP_ORD_X0, SETUP_TOP_BTN_Y, SETUP_ORD_W, SETUP_BTN_H, 6)) return SETUP_HIT_BCK;
+        if (s_place && in_box(x, y, SETUP_ORD_X1, SETUP_TOP_BTN_Y, SETUP_ORD_W, SETUP_BTN_H, 6)) return SETUP_HIT_FWD;
         if (!s_place && in_box(x, y, SETUP_TOP_BACK_X, SETUP_TOP_BTN_Y, SETUP_TOP_BTN_W, SETUP_BTN_H, m)) return SETUP_HIT_BACK;
     } else {
         if (in_box(x, y, SETUP_NEXT_X, SETUP_BTN_Y, SETUP_BTN_W, SETUP_BTN_H, m)) return SETUP_HIT_NEXT;
@@ -331,6 +335,7 @@ void setup_activate(tank_t *t, int id) {
         }
         s_sell_armed = false;                           /* any other tap stands SELL down */
         if (id == SETUP_HIT_NEXT) { s_active = false; tank_emit(TEV_CONFIRM, -1); progression_save(t); }
+        else if (id == SETUP_HIT_BCK || id == SETUP_HIT_FWD) tank_decor_shift(t, s_item, id == SETUP_HIT_FWD ? 1 : -1);   /* the stack: a step; DONE saves it */
         else if (id >= SETUP_HIT_Z0 && id < SETUP_HIT_Z0 + DECOR_Z_N)
             tank_decor_set(t, s_item, tank_decor_x(t, s_item), id - SETUP_HIT_Z0);
         else if (s_item == 3 && id >= SETUP_HIT_COLOR0 && id < SETUP_HIT_COLOR0 + CORAL_N)
@@ -498,6 +503,21 @@ static void castle_glyph(uint16_t *fb, int stride, int cx, int y_bot, uint32_t w
     render_rect(fb, stride, cx - 3, y_bot - 8, 7, 9, dark);
     render_rect(fb, stride, cx - 4, y_bot - 6, 9, 7, dark);
 }
+/* a little pumpkin lantern for its depth tiles (0.3.6): a squat orange
+ * body in three ribs, a stem, a lit face */
+static void pumpkin_glyph(uint16_t *fb, int stride, int cx, int y_bot) {
+    render_rect(fb, stride, cx - 11, y_bot - 13, 22, 11, 0xe8641a);
+    render_rect(fb, stride, cx - 9, y_bot - 15, 18, 15, 0xe8641a);
+    render_rect(fb, stride, cx - 13, y_bot - 11, 26, 7, 0xc2420e);
+    render_rect(fb, stride, cx - 12, y_bot - 12, 24, 9, 0xe8641a);
+    render_rect(fb, stride, cx - 4, y_bot - 14, 1, 13, 0xa83410);    /* the ribs */
+    render_rect(fb, stride, cx + 4, y_bot - 14, 1, 13, 0xa83410);
+    render_rect(fb, stride, cx - 8, y_bot - 12, 3, 3, 0xf88a2c);     /* the light, upper left */
+    render_rect(fb, stride, cx - 1, y_bot - 19, 3, 5, 0x66702a);     /* the stem */
+    render_rect(fb, stride, cx - 7, y_bot - 10, 3, 2, 0xffd470);     /* the face, lit */
+    render_rect(fb, stride, cx + 4, y_bot - 10, 3, 2, 0xffd470);
+    render_rect(fb, stride, cx - 5, y_bot - 6, 10, 2, 0xffa83a);
+}
 /* a depth tile: the plant's - two leaves and the keeper's first fish, in
  * the order the choice means - BEHIND (the plant behind the fish): leaves,
  * then the fish over them; AMONG: one leaf, the fish, the other leaf; IN
@@ -508,6 +528,12 @@ static void depth_tile(const tank_t *t, uint16_t *fb, int stride, int x, int y, 
     const int cx = x + w / 2, cy = y + h / 2, lh = h - 6, yb = y + h - 3;
     const uint32_t la = 0x8dbb48, lb = 0x6c9d38;
     const fish_t *who = t->n_fish > 0 ? &t->fish[0] : NULL;
+    if (item == 8) {                                    /* the pumpkin: the castle's reading, the lantern between two leaves */
+        if (z == DECOR_Z_BACK) pumpkin_glyph(fb, stride, cx, yb);
+        leaf_glyph(fb, stride, cx - 14, yb, lh, la); leaf_glyph(fb, stride, cx + 15, yb, lh, lb);
+        if (z != DECOR_Z_BACK) pumpkin_glyph(fb, stride, cx, yb);
+        return;
+    }
     if (item == 2) {
         if (z == DECOR_Z_BACK) castle_glyph(fb, stride, cx, yb, 0xa99b7b, 0xc4a95e);
         leaf_glyph(fb, stride, cx - 14, yb, lh, la); leaf_glyph(fb, stride, cx + 15, yb, lh, lb);
@@ -542,6 +568,17 @@ static void depth_tile(const tank_t *t, uint16_t *fb, int stride, int x, int y, 
     if (who) render_fish_portrait(fb, stride, (float)cx, (float)cy, 0.62f, who, clock);
     if (z == DECOR_Z_MIDDLE)  leaf_glyph(fb, stride, cx + 8, yb, lh, lb);
     if (z == DECOR_Z_FRONT) { leaf_glyph(fb, stride, cx - 8, yb, lh, la); leaf_glyph(fb, stride, cx + 8, yb, lh, lb); }
+}
+/* an order arrow (the placement page): a chevron in a small button, lit or dim */
+static void ord_arrow(uint16_t *fb, int stride, int x, int y, bool right, bool on) {
+    uint32_t e = on ? C_EDGE : dim(C_CAPT, 45);
+    render_button(fb, stride, x, y, SETUP_ORD_W, SETUP_BTN_H, C_INNER, e, "", 2);
+    int cx = x + SETUP_ORD_W / 2, cy = y + SETUP_BTN_H / 2;
+    for (int i = 0; i < 7; i++) {
+        int xx = right ? cx - 3 + i : cx + 3 - i;
+        render_rect(fb, stride, xx, cy - 6 + i, 2, 1, e);
+        render_rect(fb, stride, xx, cy + 6 - i, 2, 1, e);
+    }
 }
 static void panel(uint16_t *fb, int stride) {
     render_rect(fb, stride, SETUP_X, SETUP_Y, SETUP_W, SETUP_H, C_PANEL);
@@ -587,6 +624,25 @@ void render_setup(const tank_t *t, uint16_t *fb, int stride, float clock) {
         if (s_sell_armed) { char ok[16]; snprintf(ok, sizeof ok, "+%d OK?", progression_sell_value(s_item));
                             render_button(fb, stride, SETUP_TOP_BACK_X, SETUP_TOP_BTN_Y, SETUP_TOP_BTN_W, SETUP_BTN_H, C_GO, C_GO_E, ok, 2); }
         else render_button(fb, stride, SETUP_TOP_BACK_X, SETUP_TOP_BTN_Y, SETUP_TOP_BTN_W, SETUP_BTN_H, C_INNER, C_DIM, "SELL", 2);
+        /* the ORDER arrows (2026-10-17): a step back / forward in the stack of
+           pieces at this depth, lit when there is a piece to pass; the relation
+           is named on the hint line ("UNDER THE CORAL") */
+        int below = tank_decor_neighbor(t, s_item, -1), above = tank_decor_neighbor(t, s_item, 1);
+        ord_arrow(fb, stride, SETUP_ORD_X0, SETUP_TOP_BTN_Y, false, below >= 0);
+        ord_arrow(fb, stride, SETUP_ORD_X1, SETUP_TOP_BTN_Y, true, above >= 0);
+        /* the relation, in the depth bar's own words (Strato 2026-10-17: "behind
+           the coral" / "in front of the coral"); "THE" goes when the line is too
+           long for where it sits (the hint line, or beside COLOR / LOOK) */
+        char rel[40] = "";
+        int rel_avail = PAGE_W - 2 * 56 - 8;                               /* the hint line: the box every glass shows whole */
+        if (s_item == 3) rel_avail = (SETUP_COL_N - 1) * SETUP_COL_PX + SETUP_COL_W - render_text_w("COLOR", 2) - 14;
+        if (s_item == 4) rel_avail = (SETUP_LOOK_N - 1) * SETUP_LOOK_PX + SETUP_LOOK_W - render_text_w("LOOK", 2) - 14;
+        for (int pass = 0; pass < 2; pass++) {
+            const char *the = pass ? "" : "THE ";
+            if (above >= 0) snprintf(rel, sizeof rel, "BEHIND %s%s", the, SD_ITEMS[above].name);
+            else if (below >= 0) snprintf(rel, sizeof rel, "IN FRONT OF %s%s", the, SD_ITEMS[below].name);
+            if (render_text_w(rel, 2) <= rel_avail) break;
+        }
         /* the DEPTH bar: one outlined box, three joined segments, the chosen
            one lit; a picture tile on each and the word under it */
         static const char *const zl[DECOR_Z_N] = { "BEHIND", "AMONG", "IN FRONT" };
@@ -612,6 +668,7 @@ void render_setup(const tank_t *t, uint16_t *fb, int stride, float clock) {
             int look = tank_cluster_scheme(t);
             render_rect_blend(fb, stride, -PAGE_X, SETUP_LOOK_Y - 22, TANK_W, SETUP_LOOK_H + 30, C_PANEL, 110);
             render_text(fb, stride, SETUP_LOOK_X + 2, SETUP_LOOK_Y - 18, 2, C_CAPT, "LOOK");
+            if (rel[0]) render_text(fb, stride, SETUP_LOOK_X + SETUP_LOOK_N * SETUP_LOOK_PX - SETUP_LOOK_PX + SETUP_LOOK_W - 2 - render_text_w(rel, 2), SETUP_LOOK_Y - 18, 2, C_CAPT, rel);
             for (int i = 0; i < SETUP_LOOK_N; i++) {
                 int x = SETUP_LOOK_X + i * SETUP_LOOK_PX; bool on = i == look;
                 const cluster_scheme_t *sc = &CLUSTER_SCHEMES[i];
@@ -631,6 +688,7 @@ void render_setup(const tank_t *t, uint16_t *fb, int stride, float clock) {
             uint32_t rgb = tank_coral_rgb(t);
             render_rect_blend(fb, stride, -PAGE_X, SETUP_COL_Y - 22, TANK_W, SETUP_COL_H + 30, C_PANEL, 110);   /* a band the swatches read on, like the colour page's */
             render_text(fb, stride, SETUP_COL_X + 2, SETUP_COL_Y - 18, 2, C_CAPT, "COLOR");
+            if (rel[0]) render_text(fb, stride, SETUP_COL_X + (SETUP_COL_N - 1) * SETUP_COL_PX + SETUP_COL_W - 2 - render_text_w(rel, 2), SETUP_COL_Y - 18, 2, C_CAPT, rel);
             (void)coral_hint;
             for (int i = 0; i < SETUP_COL_N; i++) {
                 int x = SETUP_COL_X + i * SETUP_COL_PX;
@@ -639,12 +697,13 @@ void render_setup(const tank_t *t, uint16_t *fb, int stride, float clock) {
                 render_rect_edge(fb, stride, x, SETUP_COL_Y, SETUP_COL_W, SETUP_COL_H, on ? C_TEXT : C_DIM);
                 if (on) render_rect_edge(fb, stride, x + 1, SETUP_COL_Y + 1, SETUP_COL_W - 2, SETUP_COL_H - 2, C_TEXT);
             }
-        } else text_c(fb, stride, CX, SETUP_DEPTH_HINT_Y, 2, C_CAPT, s_item == 2 ? castle_hint[z] : hint[z]);
+        } else text_c(fb, stride, CX, SETUP_DEPTH_HINT_Y, 2, C_CAPT, rel[0] ? rel : s_item == 2 || s_item == 8 ? castle_hint[z] : hint[z]);
         float x0 = tank_decor_x(t, s_item) - tank_decor_half_w(s_item) - 10, x1 = tank_decor_x(t, s_item) + tank_decor_half_w(s_item) + 10, top = TANK_BOT - 16 - 40;
         if (s_item == 0) tank_veg_bed(t, 3, NULL, NULL, &top, NULL);   /* the leaves' reach */
         if (s_item == 2) top = TANK_BOT - 16 - 146;                    /* the tallest spire */
         if (s_item == 3) top = TANK_BOT - 14 + DECOR_SINK - 92;        /* the coral's top tip */
         if (s_item == 4) top = TANK_BOT - 14 + DECOR_SINK - 120;       /* the cluster's tallest tube */
+        if (s_item == 8) top = TANK_BOT - 14 + DECOR_SINK - 82;        /* the pumpkin's stem */
         x0 -= PAGE_X; x1 -= PAGE_X; top -= PAGE_Y;                     /* the piece is in the tank; the stripe is drawn on the page */
         int sy = (int)top - 8; if (sy < place_y()) sy = place_y();
         render_rect_blend(fb, stride, (int)x0, sy, (int)(x1 - x0), FLOOR - sy + 4, C_EDGE, 46);

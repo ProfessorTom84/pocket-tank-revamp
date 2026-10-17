@@ -184,6 +184,7 @@ const char *const *progression_fry_tip(int kind);
 #define SD_STAGE_ELDER 25
 #define SD_BIRTH       20
 #define SD_TRUST       15
+#define SD_SNACK       10          /* the seahorse's snack, one paid per SH_SNACK_COOL_S (0.3.6) */
 #define SD_CHORE       25          /* per SD_CHORE_EVERY colonies / SD_TRIM_CM of grass */
 #define SD_CHORE_EVERY 100
 /* the grass pays by length cut: 250 cm (2026-09-29, Strato; was 100 inches =
@@ -197,6 +198,8 @@ const char *const *progression_fry_tip(int kind);
 #define SD_PRICE_CLUSTER 240
 #define SD_PRICE_SHRIMP 180       /* 2026-09-29, Strato (first 300, then 180) */
 #define SD_PRICE_URCHIN 120       /* 2026-10-02: the grass's snail (the snail is 80, the grass pays 25 per 250 cm) */
+#define SD_PRICE_SEAHORSE 220     /* 0.3.6, Strato 2026-10-15: between the shrimp (180) and the cluster (240) */
+#define SD_PRICE_PUMPKIN 75       /* 0.3.6, Strato 2026-10-17: the seasonal lantern, "affordable" */
 typedef struct {
     uint32_t    bit;               /* SD_ITEM_* */
     const char *name;              /* <= 12 chars, the pixel font */
@@ -208,6 +211,12 @@ extern const sd_item_t SD_ITEMS[SD_ITEM_COUNT];
  * true = unlocked, placed in the tank (tank_plant_place / tank_snail_place)
  * and saved at once */
 bool progression_buy(tank_t *t, int item);
+/* the seasonal pumpkin (0.3.6): sold while SD_PUMPKIN_IN_SHOP - the first
+ * release after October 31 sets it to 0 (Strato: no date check, a board
+ * keeps selling it until it is updated). One bought stays in its tank, so
+ * the shop keeps its row for the keeper who has one. */
+#define SD_PUMPKIN_IN_SHOP 1
+bool progression_pumpkin_offered(const tank_t *t);
 /* the sale back (2026-09-24, Strato): a placeable piece sells for SD_SELL_PCT
  * of its price (the snail is a permanent resident), goes back to the shop at
  * full price and to its factory state; false = not owned or not for sale.
@@ -269,7 +278,7 @@ int  progression_sd_take_award(void);
 /* director / tests: dollars from nowhere (negative takes them away) */
 void progression_sd_grant(tank_t *t, int n);
 /* the earn table for the shop page: one line per source, "+N WORDS" */
-#define SD_EARN_LINES 6
+#define SD_EARN_LINES 7
 const char *const *progression_sd_earn_lines(void);
 
 /* population ceiling. Compile-time so the device can ship lower until its

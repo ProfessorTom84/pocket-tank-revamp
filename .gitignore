@@ -38,3 +38,4 @@ sim/sheets/
 tools/boards.local.sh
 sim/build-square/
 sim/fishsim-square
+sim/build-arm*/

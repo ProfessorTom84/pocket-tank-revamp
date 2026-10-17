@@ -46,6 +46,7 @@ static int icc_code(int ma) { if (ma < 25) ma = 25; if (ma <= 200) return ma / 2
  * (docs/board-amoled-2.16.md). */
 static int board_charge_ma(void) {
     if (board_is_square()) return 500;     /* 0.5 C */
+    if (board_is_175())    return 150;     /* the 1.75 / 1.75-B: a cell of the keeper's choosing - the 1.8's gentle rate */
     if (board_is_round())  return 400;     /* 0.8 C */
     if (board_is_watch())  return 300;     /* 0.75 C */
     return 150;                            /* 0.75 C */
@@ -59,6 +60,7 @@ static int board_charge_ma(void) {
  * makes the taper longer: fuller, not faster. */
 static int board_trickle_ma(void) {
     if (board_is_square()) return 100;     /* 1000 mAh */
+    if (board_is_175())    return 25;      /* unknown cell */
     if (board_is_round())  return 50;      /* 500 mAh */
     if (board_is_watch())  return 50;      /* 400 mAh */
     return 25;                             /* 200 mAh */

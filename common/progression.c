@@ -31,6 +31,7 @@ const char *const TMS_NAMES[TMS_COUNT] = {
     "first visit to the reef",
     "first mutation",                    /* 0.4's (main); never set on 0.3.x */
     "first fish sold",
+    "first seahorse feeding",            /* 0.3.6 */
 };
 
 /* the save keeps 644 film cells - the rectangle's 28 x 23 grid, frozen by the
@@ -168,6 +169,33 @@ typedef struct {
      * 1688 B; older saves read 0, unlocked. */
     uint8_t  tools_locked;
     uint8_t  fry_sold, pad_tip;          /* the fry offer's blanks, bit k = fry k bought (0.3.5) */
+    /* RESERVED for the 0.4 line (main): its genes, the tank and fish IDs, the
+     * fish prints and the link's away flags live at 1688..1863 there. The
+     * 0.3 line writes zeros (a 0.3.6 save reads on main as a tank without
+     * genes, as every older save does) so the seahorse below lands where
+     * main's tail ends and nothing collides at the merge forward. */
+    uint8_t  pad_04[176];
+    /* the seahorse (0.3.6): its seconds with the keeper, awake and asleep
+     * (its card: days), its hitches and the trust it passed on. Older saves
+     * (and main's) read zeros: a fresh count, which is right - they had none. */
+    float    sh_s;
+    int32_t  sh_hitches;
+    float    sh_trust_passed;
+    /* its snacks (0.3.6, later the same day): the count, the earning count,
+     * the pay ledger, the cooldown. sh_eaten took pad_sh's place (zeros in
+     * every 1880 save: a fresh count); the rest grew the save to 1892. */
+    int32_t  sh_eaten;
+    int32_t  sh_snack_pay, sd_snacks_paid;
+    float    sh_snack_cool;
+    /* the pumpkin lantern (0.3.6, the seasonal piece): its spot (0 = the
+     * default) and its depth + 1 (0 = never placed: BEHIND). Older saves
+     * read zeros. */
+    float    pumpkin_x;
+    uint8_t  pumpkin_z1, pad_pk[3];
+    /* the order of the pieces (0.3.6, later the same day): a rank per slot
+     * (castle, coral, cluster, pumpkin, plant). Older saves read zeros: the
+     * old fixed order. */
+    uint8_t  decor_rank[DECOR_SLOTS], pad_rank[3];
 } save_t;
 /* the smallest PTK2 save (pre-upkeep, 2026-08-30): anything shorter is not
  * ours. Every later build wrote sizeof(save_t) of its day - 448, 1112, 1304,
@@ -249,7 +277,16 @@ SAVE_AT(urchin_x, 1676); SAVE_AT(urchin_grazed_px, 1680);                       
 _Static_assert(sizeof(save_t) >= 1688, "SAVE LAYOUT LOCK: save_t only ever grows");
 SAVE_AT(light_tip_seen, 1684); SAVE_AT(tools_locked, 1685); SAVE_AT(fry_sold, 1686); SAVE_AT(pad_tip, 1687);   /* the lights-out notice, 10-03; the toolbox's LOCK and the fry's blanks, 0.3.5 */
 _Static_assert(sizeof(save_t) >= 1688, "SAVE LAYOUT LOCK: save_t only ever grows");
-/* (the next field: SAVE_AT(its_name, 1688 or its type's alignment past it);) */
+SAVE_AT(pad_04, 1688);                                                                                 /* main's 0.4 tail, reserved (zeros here) */
+SAVE_AT(sh_s, 1864); SAVE_AT(sh_hitches, 1868); SAVE_AT(sh_trust_passed, 1872); SAVE_AT(sh_eaten, 1876);  /* the seahorse, 0.3.6 (1876: pad_sh until its snacks) */
+_Static_assert(sizeof(save_t) >= 1880, "SAVE LAYOUT LOCK: save_t only ever grows");
+SAVE_AT(sh_snack_pay, 1880); SAVE_AT(sd_snacks_paid, 1884); SAVE_AT(sh_snack_cool, 1888);               /* its snacks, 0.3.6 */
+_Static_assert(sizeof(save_t) >= 1896, "SAVE LAYOUT LOCK: save_t only ever grows");   /* 1892 of fields, padded to 8 */
+SAVE_AT(pumpkin_x, 1892); SAVE_AT(pumpkin_z1, 1896); SAVE_AT(pad_pk, 1897);                            /* the pumpkin lantern, 0.3.6 */
+_Static_assert(sizeof(save_t) >= 1904, "SAVE LAYOUT LOCK: save_t only ever grows");   /* 1900 of fields, padded to 8 */
+SAVE_AT(decor_rank, 1900); SAVE_AT(pad_rank, 1905);                                                    /* the pieces' order, 0.3.6 */
+_Static_assert(sizeof(save_t) >= 1912, "SAVE LAYOUT LOCK: save_t only ever grows");   /* 1908 of fields, padded to 8 */
+/* (the next field: SAVE_AT(its_name, 1908 or its type's alignment past it);) */
 /* NVS budget: the save is one blob in the nvs partition (0x9000, 0x6000 =
  * 6 pages of 4096 B; tools/make_installer.py pins the row). A page is 126
  * entries of 32 B, and NVS keeps one page free for its garbage collection:
@@ -260,8 +297,8 @@ _Static_assert(sizeof(save_t) >= 1688, "SAVE LAYOUT LOCK: save_t only ever grows
  * is 3 x ~128 = ~390 entries, plus ~10 for the settings, "bat"/"hist" and
  * the batlog's "bed": under 2/3 of the 630, so GC always has room. Past it,
  * saves can start failing for space, and any nvs_flash_init error makes
- * main.c ERASE the partition. 1688 B today (the urchin, 2026-10-02: its x and its tally after the
- * watch's way up; ~54 entries a copy): 2312 B of headroom. */
+ * main.c ERASE the partition. 1896 B today (the seahorse, 0.3.6: its tally and its snacks past the
+ * 176 B held for main's 0.4 tail, 1892 of fields padded to 8; ~60 entries a copy): 2104 B of headroom. */
 #define SAVE_NVS_BUDGET 4000
 _Static_assert(sizeof(save_t) <= SAVE_NVS_BUDGET, "the save outgrew its NVS budget - see the math above");
 
@@ -318,7 +355,17 @@ const sd_item_t SD_ITEMS[SD_ITEM_COUNT] = {
     { SD_ITEM_CLUSTER, "REEF CLUSTER", "A MATURE REEF ON A ROCK,", "FILLS OUT, THEN IT BLOOMS",  SD_PRICE_CLUSTER },  /* 2026-09-24: the dearest; three looks on its page */
     { SD_ITEM_SHRIMP,  "SHRIMP",    "A SCHOOL OF CHERRY SHRIMP", "THEY EAT SCRAPS AND MULTIPLY", SD_PRICE_SHRIMP },
     { SD_ITEM_URCHIN,  "SEA URCHIN", "NIBBLES THE TALL GRASS,",  "EVEN WHILE THE TANK SLEEPS",  SD_PRICE_URCHIN },  /* 2026-10-02: the episode 5 promise, a resident like the snail */  /* 2026-09-29: a resident, like the snail; Strato: "should mention that they multiply" (28 chars, as the plant's) */
+    { SD_ITEM_SEAHORSE, "SEAHORSE",  "HOLDS ON TO YOUR FINGER,",  "FISH TRUST YOU TWICE AS FAST", SD_PRICE_SEAHORSE },  /* 0.3.6: the tame one (28 chars, as the plant's) */
+    { SD_ITEM_PUMPKIN, "PUMPKIN",    "GLOWS WHEN THE LIGHTS GO OUT", "FOR OCTOBER, YOURS TO KEEP", SD_PRICE_PUMPKIN },  /* 0.3.6: the seasonal lantern (Strato 10-17) */
 };
+/* the pumpkin's season (0.3.6; Strato 2026-10-17: "it can remain on their
+ * board until they upgrade ... whatever release comes after oct 31 will
+ * remove the pumpkin"): no date check - SD_PUMPKIN_IN_SHOP says whether
+ * this build sells it; a keeper who has one keeps it (and its shop row, to
+ * MOVE or SELL it) whatever the build */
+bool progression_pumpkin_offered(const tank_t *t) {
+    return (t->sd_unlocks & SD_ITEM_PUMPKIN) || SD_PUMPKIN_IN_SHOP;
+}
 static void sd_award(tank_t *t, int n) {
     if (n <= 0) return;
     t->sd_balance += n; t->sd_earned += n; s_sd_pending += n;
@@ -349,6 +396,7 @@ static void sd_tick(tank_t *t) {
     if (hund > t->sd_colonies_paid) { sd_award(t, SD_CHORE * (hund - t->sd_colonies_paid)); t->sd_colonies_paid = hund; }
     hund = (int32_t)(t->trim_px / (PX_PER_CM * SD_TRIM_CM));
     if (hund > t->sd_inches_paid) { sd_award(t, SD_CHORE * (hund - t->sd_inches_paid)); t->sd_inches_paid = hund; }
+    if (t->sh_snack_pay > t->sd_snacks_paid) { sd_award(t, SD_SNACK * (t->sh_snack_pay - t->sd_snacks_paid)); t->sd_snacks_paid = t->sh_snack_pay; }   /* the seahorse's snack (0.3.6) */
 }
 int progression_sell_value(int item) { return item < 0 || item >= SD_ITEM_COUNT ? 0 : SD_ITEMS[item].price * SD_SELL_PCT / 100; }
 bool progression_sell(tank_t *t, int item) {
@@ -396,6 +444,7 @@ bool progression_buy(tank_t *t, int item) {
     if (item < 0 || item >= SD_ITEM_COUNT) return false;
     const sd_item_t *it = &SD_ITEMS[item];
     if ((t->sd_unlocks & it->bit) || t->sd_balance < it->price) return false;
+    if (it->bit == SD_ITEM_PUMPKIN && !progression_pumpkin_offered(t)) return false;   /* out of season */
     t->sd_balance -= it->price; t->sd_unlocks |= it->bit;
     if (it->bit == SD_ITEM_PLANT) tank_plant_place(t);
     if (it->bit == SD_ITEM_SNAIL) tank_snail_place(t);
@@ -404,6 +453,9 @@ bool progression_buy(tank_t *t, int item) {
     if (it->bit == SD_ITEM_CLUSTER) tank_cluster_place(t);
     if (it->bit == SD_ITEM_SHRIMP) { tank_shrimp_place(t, SHRIMP_START); t->shrimp_food = 0; t->shrimp_cool = 0; }
     if (it->bit == SD_ITEM_URCHIN) tank_urchin_place(t);
+    if (it->bit == SD_ITEM_SEAHORSE) { tank_seahorse_place(t); t->sh_s = 0; t->sh_hitches = 0; t->sh_trust_passed = 0; }
+    if (it->bit == SD_ITEM_PUMPKIN) tank_pumpkin_place(t);
+    if (tank_decor_placeable(item)) tank_decor_raise(t, item);   /* the piece placed last goes on top (2026-10-17) */
     progression_save(t);                                   /* a purchase sticks at once */
     return true;
 }
@@ -417,6 +469,7 @@ const char *const *progression_sd_earn_lines(void) {
         snprintf(lines[3], 30, "+%d  A FISH FULLY TRUSTS", SD_TRUST);
         snprintf(lines[4], 30, "+%d  %d ALGAE COLONIES", SD_CHORE, SD_CHORE_EVERY);
         snprintf(lines[5], 30, "+%d  %d CM OF GRASS CUT", SD_CHORE, SD_TRIM_CM);
+        snprintf(lines[6], 30, "+%d  THE SEAHORSE SNACKS", SD_SNACK);
         for (int i = 0; i < SD_EARN_LINES; i++) ptr[i] = lines[i];
         ptr[SD_EARN_LINES] = NULL; made = true;
     }
@@ -837,6 +890,10 @@ static bool load_save(tank_t *t, int64_t *saved_unix) {
     if (sv.cluster_x > 0) tank_decor_set(t, 4, sv.cluster_x, sv.cluster_z1 ? sv.cluster_z1 - 1 : DECOR_Z_FRONT);
     tank_cluster_set_scheme(t, sv.cluster_scheme);
     t->cluster_growth = sv.cluster_growth > 0 ? sv.cluster_growth : 0;
+    tank_pumpkin_place(t);                            /* the lantern's spot and depth (0.3.6) */
+    if (sv.pumpkin_z1 == DECOR_Z_FRONT + 1) t->pumpkin_z = DECOR_Z_FRONT;
+    if (sv.pumpkin_x > 0) tank_decor_set(t, 8, sv.pumpkin_x, t->pumpkin_z);
+    memcpy(t->decor_rank, sv.decor_rank, sizeof t->decor_rank);   /* the pieces' order (zeros = the old fixed one) */
     if (t->sd_unlocks & SD_ITEM_SHRIMP) {             /* the school back in the grass, its count and its progress */
         tank_shrimp_place(t, sv.shrimp_n >= SHRIMP_START ? sv.shrimp_n : SHRIMP_START);
         t->shrimp_food = sv.shrimp_food <= SHRIMP_PER_JOIN ? sv.shrimp_food : SHRIMP_PER_JOIN;
@@ -848,6 +905,16 @@ static bool load_save(tank_t *t, int64_t *saved_unix) {
         if (sv.urchin_x > 0) t->urchin_x = sv.urchin_x;
         t->urchin_grazed_px = sv.urchin_grazed_px > 0 ? sv.urchin_grazed_px : 0;
     } else { t->urchin_x = -1; t->urchin_grazed_px = 0; }
+    if (t->sd_unlocks & SD_ITEM_SEAHORSE) {           /* back on a blade, its tally */
+        tank_seahorse_place(t);
+        t->sh_s = sv.sh_s > 0 ? sv.sh_s : 0;
+        t->sh_hitches = sv.sh_hitches > 0 ? sv.sh_hitches : 0;
+        t->sh_trust_passed = sv.sh_trust_passed > 0 ? sv.sh_trust_passed : 0;
+        t->sh_eaten = sv.sh_eaten > 0 ? sv.sh_eaten : 0;
+        t->sh_snack_pay = sv.sh_snack_pay > 0 ? sv.sh_snack_pay : 0;
+        t->sd_snacks_paid = sv.sd_snacks_paid > 0 ? sv.sd_snacks_paid : 0;
+        t->sh_snack_cool = sv.sh_snack_cool > 0 && sv.sh_snack_cool <= SH_SNACK_COOL_S ? sv.sh_snack_cool : 0;
+    } else { t->sh_x = -1; t->sh_s = 0; t->sh_hitches = 0; t->sh_trust_passed = 0; t->sh_eaten = 0; t->sh_snack_pay = 0; t->sd_snacks_paid = 0; t->sh_snack_cool = 0; }
     s_sd_prev_feedings = t->player_feedings;         /* meals before this boot are not back-paid */
     s_sd_pending = 0;
     s_arrival_pending = sv.arrival_pending; s_spawn_in = -1;
@@ -950,6 +1017,7 @@ void progression_tick(tank_t *t, float dt) {
     if (t->algae_colonies > 0) set_tms(t, TMS_FIRST_CLEANING);   /* the first colony wiped away, as the first cut is the first trimming
                                                                     (0.3.2; it was 30 cells, hours of film on a new tank) */
     if ((t->sd_unlocks & SD_ITEM_SHRIMP) && t->shrimp_n >= SHRIMP_MAX) set_tms(t, TMS_FULL_SCHOOL);
+    if ((t->sd_unlocks & SD_ITEM_SEAHORSE) && t->sh_eaten > 0) set_tms(t, TMS_SEAHORSE_FED);   /* its first snack (0.3.6) */
     if (reef_visit) set_tms(t, TMS_FIRST_REEF);  /* a fish chose to look at the reef cluster */
     if (s_sale_need > 0) set_tms(t, TMS_FIRST_SALE);   /* a tank that sold a fish before 0.3.5: its badge, and the fry */
     fry_age(t, aged);
@@ -1079,10 +1147,16 @@ bool progression_save(tank_t *t) {
     sv.coral_growth = t->coral_growth;
     sv.cluster_x = t->cluster_x > 0 ? t->cluster_x : 0; sv.cluster_z1 = (uint8_t)(t->cluster_z + 1); sv.cluster_scheme = t->cluster_scheme;
     sv.cluster_growth = t->cluster_growth;
+    sv.pumpkin_x = t->pumpkin_x > 0 ? t->pumpkin_x : 0; sv.pumpkin_z1 = (uint8_t)(t->pumpkin_z + 1);
+    memcpy(sv.decor_rank, t->decor_rank, sizeof sv.decor_rank);
     sv.shrimp_n = (t->sd_unlocks & SD_ITEM_SHRIMP) ? t->shrimp_n : 0; sv.shrimp_food = t->shrimp_food;
     sv.shrimp_cool = t->shrimp_cool > 0 ? t->shrimp_cool : 0; sv.shrimp_eaten = t->shrimp_eaten;
     sv.urchin_x = (t->sd_unlocks & SD_ITEM_URCHIN) && t->urchin_x > 0 ? t->urchin_x : 0;
     sv.urchin_grazed_px = t->urchin_grazed_px > 0 ? t->urchin_grazed_px : 0;
+    if (t->sd_unlocks & SD_ITEM_SEAHORSE) {
+        sv.sh_s = t->sh_s > 0 ? t->sh_s : 0; sv.sh_hitches = t->sh_hitches; sv.sh_trust_passed = t->sh_trust_passed;
+        sv.sh_eaten = t->sh_eaten; sv.sh_snack_pay = t->sh_snack_pay; sv.sd_snacks_paid = t->sd_snacks_paid; sv.sh_snack_cool = t->sh_snack_cool > 0 ? t->sh_snack_cool : 0;
+    }
     sv.setup_pending = s_setup_pending;
     sv.newborn_p1 = (uint8_t)(s_newborn >= 0 && s_newborn < t->n_fish ? s_newborn + 1 : 0);
     sv.bubble_x = t->bubble_x;

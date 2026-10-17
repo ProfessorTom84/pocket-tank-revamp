@@ -34,7 +34,21 @@
  * same I2C signature, so it is told from the watch by its touch chip
  * (CST92xx at 0x5A, the watch's FT3168 at 0x38). The panel's 3V3 is VCC3V3
  * (no rail to cut, as the 1.75C) with DSI_PWR_EN pulled up. Audio pins as the
- * 1.8's but the master clock on GPIO 42 (16 is SYS_OUT, the PWR key sense). */
+ * 1.8's but the master clock on GPIO 42 (16 is SYS_OUT, the PWR key sense).
+ *
+ * Waveshare ESP32-S3-Touch-AMOLED-1.75 (and -B, the same board in a plastic
+ * case; -G adds a GPS), 2026-10-17, BETA - no board on the bench: a keeper
+ * (Bryan) has the -B. Sources: resources/ESP32-S3-Touch-AMOLED-1.75/ (the
+ * schematic's GPIO table) and Waveshare's HARDWARE_REFERENCE for it. The
+ * 1.75C's panel (CO5300 466 round) and touch (CST9217 at 0x5A, INT 11) with
+ * the clock on 38, but its resets on 39 / 40 (the square's numbers; 1 / 2 / 3
+ * are an SD slot here), a TCA9554 at 0x20 like the 1.8's - P3 RTC_INT,
+ * P4 SYS_OUT (the PWR key sense), P5 AXP_IRQ, P6 QMI_INT1, P7 GPS_RST, all
+ * inputs: no resets on it - an RTC (PCF85063) unlike the 1.75C, an ES7210
+ * on A3V3 = ALDO1 (the 1.75C's trap: off, it clamps the bus) and the audio
+ * master clock on 42. Told from the 1.8 by the ES7210: expander + ES7210.
+ * Before this, the board took the 1.8's path: wrong clock pin, its panel
+ * reset never driven, and the 1.8's rail trim cut ALDO1 - a dark glass. */
 #ifndef BOARD_PINS_H
 #define BOARD_PINS_H
 #define PIN_LCD_CS        12
@@ -91,4 +105,9 @@
 #define S_PIN_KEY3        18       /* the user button (unused) */
 #define S_PANEL           480
 #define S_PANEL_X_GAP     0
+
+/* ---- the 1.75 / 1.75-B (expander, RTC, SD slot): the 1.75C's panel otherwise ---- */
+#define B_PIN_LCD_RST     39
+#define B_PIN_TP_RST      40
+#define B_PIN_I2S_MCLK    42
 #endif

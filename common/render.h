@@ -89,6 +89,10 @@ void render_fb_primed(const uint16_t *fb, unsigned epoch);
  * it has eaten (cm) and what it is up to (chewing / off to the tall grass /
  * resting). */
 #define RENDER_CARD_URCHIN 97
+/* fish_idx == RENDER_CARD_SEAHORSE (0.3.6): the seahorse's card - a ring on
+ * it and a centred card: the seahorse at 2x, its days with the keeper, its
+ * hitches, the trust it passed on and what it is doing. */
+#define RENDER_CARD_SEAHORSE 96
 void render_stats_card(const tank_t *t, int fish_idx, uint16_t *fb, int stride);
 /* Optional card cache (RENDER_CARD_W x RENDER_CARD_H uint16): with the scene
  * cache live, the card is redrawn at most 4x/s and blitted otherwise (~7 ms
@@ -275,6 +279,11 @@ int  render_cluster_cells(float growth); /* the reef cluster's, likewise */
  * block the platform provides - PSRAM on the board (internal RAM is spoken
  * for); the sim leaves it unset and render calloc's it */
 size_t render_decor_scratch_size(void);
+/* the pumpkin lantern (0.3.6, SD_ITEM_PUMPKIN): its sprite's pixels, and
+ * in *glow the ones redrawn every frame (the face + the flame) */
+int    render_pumpkin_px(int *glow);   /* its pixels; *glow = the ones redrawn every frame */
+void   render_set_pumpkin_hidden(bool hidden);   /* the frame-rate A/B (director `pumpkin off`): not drawn, no light */
+bool   render_pumpkin_hidden(void);
 void   render_set_decor_scratch(void *buf);
 /* the sand dollar toast: dollars awarded during play (progression_sd_take_award)
  * show as a small pill top centre of the live tank, "+N" beside the coin,
@@ -369,6 +378,8 @@ void render_fish_portrait(uint16_t *fb, int stride, float x, float y, float size
 #define SHRIMP_CARD_H 190
 #define URCHIN_CARD_W 336
 #define URCHIN_CARD_H 194
+#define SEAHORSE_CARD_W 336
+#define SEAHORSE_CARD_H 188
 /* the milestones page (the bowl has its own rows and buttons: render.c) */
 #ifdef TANK_ROUND
 #define MSP_ROW_Y0    56
@@ -464,7 +475,7 @@ void render_fish_portrait(uint16_t *fb, int stride, float x, float y, float size
 #define SHP_MODAL_H   244
 #define SHP_EARN_MODAL_Y 40
 /* the caption under the rows sits SHP_BTN_H + 12 under the last row (the third row, the castle, 2026-09-16: it used to be fixed at 224 / 244 and the castle's row ran into it) */
-#define SHP_EARN_MODAL_H 224
+#define SHP_EARN_MODAL_H 248        /* seven lines since the seahorse's snack (0.3.6) */
 #define SHP_TWO_GAP 16               /* MOVE and SELL side by side in the modal */
 #define SHP_TWO_X0  (SHP_MODAL_X + (SHP_MODAL_W - 2 * MSP_HOW_W - SHP_TWO_GAP) / 2)
 #define SHP_TWO_X1  (SHP_TWO_X0 + MSP_HOW_W + SHP_TWO_GAP)

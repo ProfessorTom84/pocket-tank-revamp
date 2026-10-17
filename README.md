@@ -31,7 +31,7 @@ no toolchain needed. Come hang out with other keepers on the
 **[Pocket Tank Discord](https://pocketank.com/discord)**: show off your tank,
 get help, and share ideas for what comes next.
 
-The current release is **v0.3.5** (alpha); the settings page shows the one
+The current release is **v0.3.6** (alpha); the settings page shows the one
 on your tank. What changed in each release:
 **[pocketank.com/updates](https://pocketank.com/updates/)**.
 
@@ -294,7 +294,9 @@ BEHIND puts it behind the grass and the fish, a ruin in the weeds; IN
 FRONT stands it in front of the grass, which stops at its walls, and the
 fish swim through the arch, tucked behind the jambs as they pass. The
 fish do not know it is there. They find the arch by chance, which is most
-of the charm.
+of the charm. Since 0.3.6 the arch is open: you see the back of the tank
+through it, a little darker, as through a tunnel, and the grass grows in
+it.
 
 **The coral.** The fourth thing in the shop (100) is a branching coral,
 drawn from a little skeleton of rounded branches on a chunky pixel grid:
@@ -352,10 +354,34 @@ the grass short and it leaves the sword plant alone, so there is still
 trimming for you to do. Tap it for its card: how much grass it has eaten so
 far, and whether it is grazing or resting.
 
+**The seahorse.** The eighth thing in the shop (220). It perches on a blade
+of grass, a sword leaf, a coral branch or a castle tower, tail curled
+round, and moves every few minutes. Rest a still finger on the glass and
+it swims over and curls its tail round your fingertip; while it holds on,
+the fish near your finger trust you twice as fast. A pellet that drifts to
+its snout is snapped up, and the first one every ten minutes earns you 10
+sand dollars. Tap it for its card.
+
+**A pumpkin for October.** The ninth thing in the shop (75), on the shop's
+last page until the first update after Halloween; one you have bought
+stays yours. By day it is a carved pumpkin with a lit face. Turn the tank
+light off (double-tap the glass) and its candle lights the water, the sand,
+the grass and whatever swims by, and anything in front of it, the castle
+too, throws a shadow across the sand. Finally a good reason to turn the
+tank light off.
+
 **The night shift.** The snail and the urchin keep working while the tank
 sleeps. A tank with a snail wakes up with about a third less algae on the
-glass, and a tank with an urchin wakes up to shorter grass. Helpers take
-the edge off a long sleep; they never take the chores away.
+glass, and a tank with an urchin wakes up to shorter grass. Since 0.3.6 the
+urchin also holds the grass in check while the tank is awake, and both do
+more overnight, so a week away comes back cleaner. Helpers take the edge
+off a long sleep; they never take the chores away.
+
+**What stands in front.** Every decoration has a place in the stack, and
+the one you placed last goes on top. Two decorations on the same spot?
+Hold one to open its page: two arrows between SELL and DONE move it a
+step back or forward, and the page says where it stands, BEHIND THE CORAL
+or IN FRONT OF THE CASTLE.
 
 **Selling back, and the short way to a piece.** Tap and hold a still
 finger on any decoration in the tank and its placement page opens right
@@ -604,7 +630,7 @@ Four Waveshare boards are supported, all ESP32-S3R8 with 16 MB flash or more and
 | Board | Glass | Build |
 |---|---|---|
 | **ESP32-S3-Touch-AMOLED-1.8** (V1 and V2, auto-detected) | 368×448, shown as a 448×368 tank | the default |
-| **ESP32-S3-Touch-AMOLED-1.75C**, the pendant | 466 px circle | `sdkconfig.round` |
+| **ESP32-S3-Touch-AMOLED-1.75C**, the pendant (the plain **1.75** and **1.75-B** run the same image, in beta since 0.3.6) | 466 px circle | `sdkconfig.round` |
 | **ESP32-S3-Touch-AMOLED-2.06**, the watch | 410×502, portrait | `sdkconfig.watch` |
 | **ESP32-S3-Touch-AMOLED-2.16**, the square | 480×480 | `sdkconfig.square` |
 
