@@ -17,10 +17,16 @@ static float hypot2(float x, float y) { return sqrtf(x * x + y * y); }
 
 /* ---- layout ---- */
 void dish_ui_icon_pos(icon_t i, float *x, float *y) {
-    /* the icons sit on an arc just inside the rim, along the bottom of the dish */
-    float rx = DISH_RX - 32, ry = DISH_RY - 32, step = (2 * DISH_ICON_R + 8) / rx;
-    float a = 1.5708f - (i - (ICON_COUNT - 1) * 0.5f) * step;   /* FEED on the left */
-    *x = DISH_CX + cosf(a) * rx; *y = DISH_CY + sinf(a) * ry;
+    /* the icons follow the glass's bottom edge: a straight row on a flat bottom, a curve where the glass curves */
+    *x = DISH_CX + (i - (ICON_COUNT - 1) * 0.5f) * (2 * DISH_ICON_R + 8);   /* FEED on the left */
+    *y = DISH_H - DISH_ICON_R - 4;
+    while (*y > DISH_CY && !dish_inside(*x, *y, DISH_ICON_R + 6)) *y -= 1;   /* lifted, never pulled sideways: the row keeps its spacing */
+}
+/* the highest row where a thing w px wide, centred, sits m px inside the glass (the round board's top is narrow) */
+static float top_for(float w, float m) {
+    float y = m;
+    while (y < DISH_CY && !(dish_inside(DISH_CX - w * 0.5f, y, m) && dish_inside(DISH_CX + w * 0.5f, y, m))) y += 2;
+    return y;
 }
 #define PW (DISH_W - 48 < 340 ? DISH_W - 48 : 340)
 #define PH (DISH_H - 80 < 272 ? DISH_H - 80 : 272)
@@ -61,7 +67,7 @@ static rect_t name_prev(void) { return (rect_t){ PX + 20, PY + 92, 48, 48 }; }
 static rect_t name_next(void) { return (rect_t){ PX + PW - 68, PY + 92, 48, 48 }; }
 static rect_t name_box(void)  { return (rect_t){ PX + 76, PY + 88, PW - 152, 56 }; }
 /* a tool in hand: the DONE chip at the top */
-static rect_t tool_chip(void) { return (rect_t){ (int)DISH_CX - 70, (int)(DISH_CY - DISH_RY + 34), 140, 32 }; }
+static rect_t tool_chip(void) { return (rect_t){ (int)DISH_CX - 70, (int)top_for(140, 6) + 34, 140, 32 }; }
 void dish_ui_hotspot(hotspot_t h, float *x, float *y) {
     rect_t r;
     switch (h) {
@@ -749,7 +755,7 @@ void dish_ui_render(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int st) {
     if (u->emote_t > 0 && pet->count > 0 && u->page == PAGE_NONE) {
         float k = fminf(1, u->emote_t * 2) * fminf(1, (3 - u->emote_t) * 4 + 0.01f);
         float x = pet->cx, y = pet->cy - 34 - (3 - u->emote_t) * 4;
-        if (y < DISH_CY - DISH_RY + 40) y = DISH_CY - DISH_RY + 40;
+        if (y < top_for(40, 6) + 30) y = top_for(40, 6) + 30;
         if (u->emote == NEED_COUNT) {
             for (int h = 0; h < 3; h++) {
                 float hx = x + (h - 1) * 16, hy = y - h % 2 * 6, s = 5;
@@ -781,7 +787,7 @@ void dish_ui_render(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int st) {
     }
     /* the top: the pet's name, its mood, and the DNA to spend */
     if (u->page == PAGE_NONE && !u->setup) {
-        int ty = (int)(DISH_CY - DISH_RY + 14) + (d->uv_t > 0 ? 18 : 0);   /* (out from under the UV lamp) */
+        int ty = (int)top_for(150, 6) + 4 + (d->uv_t > 0 ? 14 : 0);   /* (out from under the UV lamp) */
         snprintf(b, sizeof b, "%s", pet->name);
         int w = dr_text_w(b, 2);
         float fx = DISH_CX + w * 0.5f + 14;

@@ -67,6 +67,13 @@ static int fails;
 #define CHECK(cond, ...) do { if (!(cond)) { printf("FAIL: " __VA_ARGS__); printf("\n"); fails++; } } while (0)
 
 static int selftest_dish(void) {
+    /* 0. the glass: the whole screen, its own corners */
+    CHECK(fabsf(dish_edge_dist(DISH_CX, 0.5f) - 0.5f) < 0.01f, "the top of the glass is %.2f px from the top edge", dish_edge_dist(DISH_CX, 0.5f));
+    CHECK(fabsf(dish_edge_dist(0.5f, DISH_CY) - 0.5f) < 0.01f, "the side of the glass is %.2f px from the side edge", dish_edge_dist(0.5f, DISH_CY));
+    CHECK(!dish_inside(1, 1, 0), "the frame's very corner counts as glass");
+    CHECK(dish_inside(DISH_CORNER_R, DISH_CORNER_R, DISH_CORNER_R * 0.4f), "a corner's arc centre is not well inside");
+    {   float x = 2, y = DISH_H - 2; dish_toward_inside(&x, &y, 12);
+        CHECK(fabsf(dish_edge_dist(x, y) - 12) < 0.05f, "toward_inside left a corner point %.2f px in, not 12", dish_edge_dist(x, y)); }
     /* 1. a tended dish lives and stays inside its pool */
     dish_init(&dish, 7, SP_BACILLUS, "BLIP");
     run(&dish, 600, 40, true);

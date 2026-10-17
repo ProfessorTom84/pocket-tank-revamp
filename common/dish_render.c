@@ -196,37 +196,23 @@ static inline uint16_t pack_dither(float r, float g, float b, int x, int y) {
 }
 static uint32_t hash2(int x, int y) { uint32_t h = (uint32_t)x * 374761393u + (uint32_t)y * 668265263u; h = (h ^ (h >> 13)) * 1274126177u; return h ^ (h >> 16); }
 static void scene_build(uint16_t *out, int stride, bool light, float ph, float salt, int ya, int yb) {
+    /* the agar fills the glass edge to edge: no rim, no wall - the screen's own edge is the dish's */
     float dim = light ? 1.0f : 0.45f;
-    float R = (DISH_RX + DISH_RY) * 0.5f;
-    const float lx = -0.7071f, ly = -0.7071f;     /* the lamp: upper left */
     for (int y = ya; y < yb; y++)
         for (int x = 0; x < DISH_W; x++) {
-            float u = (x + 0.5f - DISH_CX) / DISH_RX, v = (y + 0.5f - DISH_CY) / DISH_RY;
-            float q = sqrtf(u * u + v * v), dist = (1 - q) * R;        /* px inside the agar's edge (negative: in the glass) */
+            float dist = dish_edge_dist(x + 0.5f, y + 0.5f);       /* px in from the glass (negative: past a round corner) */
             float r = 0, g = 0, b = 0;
-            if (dist > -11) {
-                float c = q > 1e-3f ? (u * lx + v * ly) / q : 0;      /* toward the lamp */
-                float lamp = c > 0 ? c * c * c * c : 0, back = c < 0 ? powf(-c, 6) * 0.35f : 0;
-                if (dist > 0) {                                        /* the agar */
-                    float men = expf(-dist / 16) * (14 + 30 * lamp);     /* the meniscus catches the lamp */
-                    float mott = 2.5f * sinf(x * 0.031f + sinf(y * 0.017f) * 2) * sinf(y * 0.027f + 1.3f);
-                    float grain = (int)(hash2(x, y) % 7) - 3;
-                    float base = 7 + mott + grain * 0.6f;
-                    r = base * 0.75f + men * 0.55f; g = base * 0.7f + men * 0.75f; b = base * 1.2f + men;
-                    /* the agar is an indicator: sour goes rose-orange, soapy goes violet-blue */
-                    float pk = fabsf(ph - 0.5f) * 2;
-                    if (pk > 0.08f) { pk = (pk - 0.08f) * 16; if (ph < 0.5f) { r += pk * 1.0f; g += pk * 0.35f; } else { r += pk * 0.4f; b += pk * 1.0f; } }
-                    /* salt crusts the agar near the glass in white crystals */
-                    if (salt > 0.3f && dist < 40 && (hash2(x * 3, y * 7) & 1023) < (salt - 0.3f) * 60 * (1 - dist / 40)) { r += 70; g += 75; b += 80; }
-                    float edge = expf(-(dist / 1.8f) * (dist / 1.8f)) * (55 + 170 * lamp + 60 * back);
-                    r += edge * 0.85f; g += edge * 0.92f; b += edge;
-                } else {                                               /* the glass wall */
-                    float wall = 10 + 18 * lamp;
-                    float outer = expf(-((dist + 9) / 1.5f) * ((dist + 9) / 1.5f)) * (30 + 120 * lamp + 50 * back);
-                    float inner = expf(-(dist / 1.8f) * (dist / 1.8f)) * (55 + 170 * lamp + 60 * back);
-                    float body = dist > -9 ? 1 : fmaxf(0, 1 - (-9 - dist) / 2);
-                    r = wall * body * 0.8f + (outer + inner) * 0.85f; g = wall * body * 0.9f + (outer + inner) * 0.92f; b = wall * body * 1.1f + outer + inner;
-                }
+            if (dist > 0) {
+                float mott = 2.5f * sinf(x * 0.031f + sinf(y * 0.017f) * 2) * sinf(y * 0.027f + 1.3f);
+                float grain = (int)(hash2(x, y) % 7) - 3;
+                float base = 7 + mott + grain * 0.6f;
+                r = base * 0.75f; g = base * 0.7f; b = base * 1.2f;
+                /* the agar is an indicator: sour goes rose-orange, soapy goes violet-blue */
+                float pk = fabsf(ph - 0.5f) * 2;
+                if (pk > 0.08f) { pk = (pk - 0.08f) * 16; if (ph < 0.5f) { r += pk * 1.0f; g += pk * 0.35f; } else { r += pk * 0.4f; b += pk * 1.0f; } }
+                /* salt crusts the agar near the glass in white crystals */
+                if (salt > 0.3f && dist < 40 && (hash2(x * 3, y * 7) & 1023) < (salt - 0.3f) * 60 * (1 - dist / 40)) { r += 70; g += 75; b += 80; }
+                if (dist < 1) { r *= dist; g *= dist; b *= dist; }   /* (a round corner's edge, antialiased) */
             }
             if (!light) { r *= dim * 0.8f; g *= dim * 0.9f; b *= dim * 1.15f; }
             out[y * stride + x] = pack_dither(r, g, b, x, y);
@@ -549,21 +535,14 @@ void dish_render_band(const dish_t *d, uint16_t *fb, int stride, int y0, int y1)
     view_t v = frame_view(fb, stride);
     v.y0 = y0; v.y1 = y1;
     v.dim = d->light ? 1.0f : 0.55f;
-    /* the field glow goes down here, before the glints, whether or not the background holds it:
-       saturating 565 adds don't commute, so the order must be the same either way */
+    /* the field glow, when the background doesn't already hold it */
     if (!(g_scene && g_bg)) draw_fields_glow(&v, d);
     v.fields_baked = true;
-    /* the lamp's glints wander a little round the rim */
-    for (int k = 0; k < 3; k++) {
-        float a = -2.356f + (k - 1) * 0.35f + sinf(d->clock * 0.23f + k * 2.1f) * 0.12f;
-        float x = DISH_CX + cosf(a) * (DISH_RX - 1.5f), y = DISH_CY + sinf(a) * (DISH_RY - 1.5f);
-        v_glow(&v, x, y, k == 1 ? 9 : 6, 0xDDEBFF, (k == 1 ? 0.6f : 0.35f) * (0.75f + 0.25f * sinf(d->clock * 1.1f + k)));
-    }
     draw_world(&v, d);
     /* the UV lamp: a violet bar over the dish and its rays, flickering */
     if (d->uv_t > 0) {
         float k = fminf(1, d->uv_t) * (0.75f + 0.25f * sinf(d->clock * 23));
-        float ty = DISH_CY - DISH_RY + 4;
+        float ty = 5;                                /* (the glass's top edge, at its middle, on every board) */
         v_line(&v, DISH_CX - 46, ty, DISH_CX + 46, ty, 5, 0xD8B0FF, 0, (int)(255 * k));
         v_glow(&v, DISH_CX, ty, 60, 0x9A4CFF, 0.6f * k);
         for (int m = -3; m <= 3; m++)

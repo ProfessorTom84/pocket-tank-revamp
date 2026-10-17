@@ -30,11 +30,22 @@
 #define DISH_W 448
 #define DISH_H 368
 #endif
-/* the dish: an ellipse inscribed in the frame (a circle on the bowl and the square) */
+/* the dish is the whole glass, edge to edge: a rectangle with the glass's own
+ * round corners (tank.h's geometry). A circle is the same shape with the corner
+ * radius half the width, so the pendant's round glass needs no case of its own. */
+#if defined(TANK_ROUND)
+#define DISH_CORNER_R 233.0f
+#elif defined(TANK_WATCH)
+#define DISH_CORNER_R 100.0f
+#elif defined(TANK_SQUARE)
+#define DISH_CORNER_R 40.0f
+#else
+#define DISH_CORNER_R 18.0f     /* the 1.8's corners are slightly round: things stay clear of them */
+#endif
 #define DISH_CX (DISH_W * 0.5f)
 #define DISH_CY (DISH_H * 0.5f)
-#define DISH_RX (DISH_W * 0.5f - 10)
-#define DISH_RY (DISH_H * 0.5f - 10)
+#define DISH_RX (DISH_W * 0.5f)   /* half the glass, across and down */
+#define DISH_RY (DISH_H * 0.5f)
 
 #define DISH_MAX_CELLS   192    /* ponytail: fixed pool; the device budget is set by the renderer, not RAM */
 #define DISH_MAX_STRAINS 6
@@ -141,6 +152,9 @@ int  dish_add_strain(dish_t *d, species_t sp, const char *name);
 int  dish_spawn(dish_t *d, int strain, float x, float y, const genome_t *g);
 genome_t dish_species_genome(species_t sp);
 bool dish_inside(float x, float y, float margin);     /* within the dish, at least margin px from the glass */
+float dish_edge_dist(float x, float y);               /* px from (x,y) to the glass: > 0 inside, < 0 outside */
+void dish_edge_normal(float x, float y, float *nx, float *ny);   /* the glass's outward normal nearest (x,y) */
+void dish_toward_inside(float *x, float *y, float m); /* (x,y) moved in along the normal until m px from the glass */
 float dish_rand(dish_t *d, float lo, float hi);
 
 /* the keeper's hands (frame coordinates) */

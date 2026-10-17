@@ -38,11 +38,28 @@ static uint32_t xs(dish_t *d) { uint32_t x = d->rng; x ^= x << 13; x ^= x >> 17;
 float dish_rand(dish_t *d, float lo, float hi) { return lo + (hi - lo) * (xs(d) >> 8) * (1.0f / 16777216.0f); }
 static float clampf(float v, float lo, float hi) { return v < lo ? lo : v > hi ? hi : v; }
 
-bool dish_inside(float x, float y, float m) {
-    float rx = DISH_RX - m, ry = DISH_RY - m;
-    if (rx <= 0 || ry <= 0) return false;
-    float u = (x - DISH_CX) / rx, v = (y - DISH_CY) / ry;
-    return u * u + v * v <= 1;
+/* the glass as a rounded rectangle's distance field: inside the straight part, the distance to the
+ * nearer side; in a corner's square, to the corner's arc */
+float dish_edge_dist(float x, float y) {
+    float qx = fabsf(x - DISH_CX) - (DISH_RX - DISH_CORNER_R), qy = fabsf(y - DISH_CY) - (DISH_RY - DISH_CORNER_R);
+    float out = sqrtf(fmaxf(qx, 0) * fmaxf(qx, 0) + fmaxf(qy, 0) * fmaxf(qy, 0)), in = fminf(fmaxf(qx, qy), 0);
+    return DISH_CORNER_R - out - in;
+}
+bool dish_inside(float x, float y, float m) { return dish_edge_dist(x, y) >= m; }
+void dish_edge_normal(float x, float y, float *nx, float *ny) {
+    float sx = x < DISH_CX ? -1.0f : 1.0f, sy = y < DISH_CY ? -1.0f : 1.0f;
+    float qx = fabsf(x - DISH_CX) - (DISH_RX - DISH_CORNER_R), qy = fabsf(y - DISH_CY) - (DISH_RY - DISH_CORNER_R);
+    if (qx > 0 && qy > 0) { float l = sqrtf(qx * qx + qy * qy); *nx = sx * qx / l; *ny = sy * qy / l; }   /* in a corner: out along its radius */
+    else if (qx > qy) { *nx = sx; *ny = 0; }
+    else { *nx = 0; *ny = sy; }
+}
+void dish_toward_inside(float *x, float *y, float m) {
+    for (int k = 0; k < 4; k++) {                   /* (a step or two; a corner can need a second) */
+        float e = dish_edge_dist(*x, *y);
+        if (e >= m) return;
+        float nx, ny; dish_edge_normal(*x, *y, &nx, &ny);
+        *x -= nx * (m - e + 0.01f); *y -= ny * (m - e + 0.01f);
+    }
 }
 
 /* ---- fields ---- */
@@ -299,7 +316,9 @@ void dish_outbreak(dish_t *d, int n) {
     float a0 = dish_rand(d, 0, TAU);
     for (int k = 0; k < n; k++) {
         float a = a0 + dish_rand(d, -0.4f, 0.4f);
-        dish_spawn(d, s, DISH_CX + cosf(a) * (DISH_RX - 18), DISH_CY + sinf(a) * (DISH_RY - 18), NULL);
+        float x = DISH_CX + cosf(a) * (DISH_RX - 18), y = DISH_CY + sinf(a) * (DISH_RY - 18);
+        dish_toward_inside(&x, &y, 18);              /* (in from a corner, where the glass curves) */
+        dish_spawn(d, s, x, y, NULL);
     }
     emit(DEV_OUTBREAK, s);
 }
@@ -604,11 +623,9 @@ static void cell_tick(dish_t *d, int i, float dt) {
 
     /* the glass: back inside, heading turned in */
     if (!dish_inside(c->x, c->y, r + 2)) {
-        float u = (c->x - DISH_CX) / (DISH_RX - r - 2), v = (c->y - DISH_CY) / (DISH_RY - r - 2);
-        float q = sqrtf(u * u + v * v);
-        c->x = DISH_CX + u / q * (DISH_RX - r - 2.5f);
-        c->y = DISH_CY + v / q * (DISH_RY - r - 2.5f);
-        float nx = u / q, ny = v / q, dot = c->vx * nx + c->vy * ny;
+        float nx, ny; dish_edge_normal(c->x, c->y, &nx, &ny);
+        dish_toward_inside(&c->x, &c->y, r + 2.5f);
+        float dot = c->vx * nx + c->vy * ny;
         if (dot > 0) { c->vx -= 2 * dot * nx; c->vy -= 2 * dot * ny; }
         if (cosf(c->ang) * nx + sinf(c->ang) * ny > 0) c->ang = atan2f(-ny, -nx) + dish_rand(d, -1, 1);
     }
