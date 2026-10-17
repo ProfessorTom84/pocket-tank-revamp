@@ -61,6 +61,7 @@ typedef struct {
     float drug_res;  /* antibiotic resistance 0..1 */
     float phage_res; /* chance a phage fails to get in, 0..1 */
     float div_rate;  /* x how fast it turns energy into a daughter, 0.6..1.6 */
+    float ph_opt;    /* the pH it thrives at, 0 acid .. 1 base (0.5 = neutral) */
 } genome_t;
 
 typedef enum { CS_FREE, CS_LIVE, CS_SPORE, CS_DYING } cell_state_t;
@@ -109,6 +110,9 @@ typedef struct {
     float drug[FIELD_N * FIELD_N];     /* antibiotic, 0..1 (fades) */
     float flowx[FIELD_N * FIELD_N], flowy[FIELD_N * FIELD_N];   /* the stir current, px/s */
     float temp;                        /* the dish's temperature 0..1 (0.5 = room) */
+    float ph;                          /* 0 acid .. 1 base (0.5 = neutral) */
+    float salt;                        /* 0 fresh .. 1 brine (0.2 = agar) */
+    float uv_t;                        /* > 0 while the UV lamp is on: mutations run wild */
     float warm_x, warm_y, warm;        /* a finger held on the glass warms the spot under it */
     bool light;
     float clock;
@@ -139,6 +143,9 @@ void dish_rap(dish_t *d, float x, float y);                  /* three raps: the 
 void dish_dose(dish_t *d, float x, float y, float amount);   /* antibiotic */
 void dish_antiviral(dish_t *d);                              /* clears the free phages */
 void dish_wipe(dish_t *d, float x, float y, float r);        /* wipes waste under a stroke */
+void dish_uv(dish_t *d, float seconds);                      /* the UV lamp: more mutations, a little harm */
+int  dish_add_sample(dish_t *d, species_t sp);               /* a new colony from the sample rack (-1: no room, or already here) */
+float dish_stress(const dish_t *d, const cell_t *c, float *comfort);   /* harm/s from heat, pH, salt, UV; comfort 0..1 */
 void dish_outbreak(dish_t *d, int n);                        /* wild phages drift in from the rim */
 
 /* the save: a compact byte image (~8 KB), append-only. dish_load returns false

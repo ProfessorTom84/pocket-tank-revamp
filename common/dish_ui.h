@@ -12,7 +12,7 @@
 #include "dish.h"
 
 typedef enum { ICON_FEED, ICON_LAB, ICON_MEDS, ICON_CLEAN, ICON_ZOOM, ICON_CARD, ICON_COUNT } icon_t;
-typedef enum { PAGE_NONE, PAGE_CARD, PAGE_LAB, PAGE_MEDS } page_t;
+typedef enum { PAGE_NONE, PAGE_CARD, PAGE_LAB, PAGE_MEDS, PAGE_SAMPLES } page_t;
 typedef enum { TOOL_NONE, TOOL_DRUG, TOOL_WIPE, TOOL_ZOOM } tool_t;
 typedef enum { NEED_FOOD, NEED_COMFORT, NEED_SPACE, NEED_CLEAN, NEED_HEALTH, NEED_COUNT } need_t;
 extern const char *const NEED_NAMES[NEED_COUNT];
@@ -44,7 +44,8 @@ void dish_ui_toast(dish_ui_t *u, const char *s, float seconds);
 
 /* layout, so a test or the director can tap things without a literal pixel */
 void dish_ui_icon_pos(icon_t i, float *x, float *y);
-typedef enum { HS_LAB_MINUS, HS_LAB_PLUS, HS_LAB_LIGHT, HS_DONE, HS_MEDS_DRUG, HS_MEDS_VIRUS, HS_TOOL_DONE } hotspot_t;
+typedef enum { HS_LAB_MINUS, HS_LAB_PLUS, HS_LAB_LIGHT, HS_DONE, HS_MEDS_DRUG, HS_MEDS_VIRUS, HS_TOOL_DONE,
+               HS_PH_MINUS, HS_PH_PLUS, HS_SALT_MINUS, HS_SALT_PLUS, HS_LAB_UV, HS_LAB_SAMPLES, HS_SAMPLE_0, HS_SAMPLE_1, HS_SAMPLE_2 } hotspot_t;
 void dish_ui_hotspot(hotspot_t h, float *x, float *y);   /* the centre of a page's button */
 #define DISH_ICON_R 19
 

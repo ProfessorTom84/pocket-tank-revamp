@@ -11,6 +11,7 @@
 #include <string.h>
 
 #define TAU 6.2831853f
+static float clampf01(float v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
 #define FCW ((float)DISH_W / FIELD_N)
 #define FCH ((float)DISH_H / FIELD_N)
 
@@ -176,7 +177,7 @@ static inline uint16_t pack_dither(float r, float g, float b, int x, int y) {
     return (uint16_t)((ri << 11) | (gi << 5) | bi);
 }
 static uint32_t hash2(int x, int y) { uint32_t h = (uint32_t)x * 374761393u + (uint32_t)y * 668265263u; h = (h ^ (h >> 13)) * 1274126177u; return h ^ (h >> 16); }
-static void scene_build(uint16_t *out, int stride, bool light) {
+static void scene_build(uint16_t *out, int stride, bool light, float ph, float salt) {
     float dim = light ? 1.0f : 0.45f;
     float R = (DISH_RX + DISH_RY) * 0.5f;
     const float lx = -0.7071f, ly = -0.7071f;     /* the lamp: upper left */
@@ -194,6 +195,11 @@ static void scene_build(uint16_t *out, int stride, bool light) {
                     float grain = (int)(hash2(x, y) % 7) - 3;
                     float base = 7 + mott + grain * 0.6f;
                     r = base * 0.75f + men * 0.55f; g = base * 0.7f + men * 0.75f; b = base * 1.2f + men;
+                    /* the agar is an indicator: sour goes rose-orange, soapy goes violet-blue */
+                    float pk = fabsf(ph - 0.5f) * 2;
+                    if (pk > 0.08f) { pk = (pk - 0.08f) * 16; if (ph < 0.5f) { r += pk * 1.0f; g += pk * 0.35f; } else { r += pk * 0.4f; b += pk * 1.0f; } }
+                    /* salt crusts the agar near the glass in white crystals */
+                    if (salt > 0.3f && dist < 40 && (hash2(x * 3, y * 7) & 1023) < (salt - 0.3f) * 60 * (1 - dist / 40)) { r += 70; g += 75; b += 80; }
                     float edge = expf(-(dist / 1.8f) * (dist / 1.8f)) * (55 + 170 * lamp + 60 * back);
                     r += edge * 0.85f; g += edge * 0.92f; b += edge;
                 } else {                                               /* the glass wall */
@@ -263,8 +269,15 @@ static void draw_fields(const view_t *v, const dish_t *d) {
 }
 
 /* ---- the cells ---- */
+/* evolution you can see: a strain raised warm reddens, one raised cold goes icy blue */
+static float shown_hue(const genome_t *g) {
+    float h = g->hue, to = g->heat_opt > 0.5f ? 0.02f : 0.56f, t = clampf01((fabsf(g->heat_opt - 0.5f) - 0.05f) * 3.0f);
+    float dh = to - h; dh -= floorf(dh + 0.5f);          /* the short way round the wheel */
+    h += dh * t;
+    return h - floorf(h);
+}
 static shade_t shade_for(const cell_t *c, float bright) {
-    float h = c->g.hue;
+    float h = shown_hue(&c->g);
     shade_t s;
     if (c->state == CS_SPORE) {
         s.body = dr_hsv(h, 0.15f, 1); s.rim = 0xFFFFFF; s.halo = dr_hsv(h, 0.3f, 0.8f);
@@ -305,7 +318,7 @@ static void draw_phage(const view_t *v, const cell_t *c, float clock) {
     float s = v->s, x = WX(v, c->x), y = WY(v, c->y), r = dish_cell_radius(c) * s;
     float a = c->health > 0 ? 0.35f + 0.65f * fminf(1, c->health * 1.5f) : 0;
     if (c->state == CS_DYING) a *= 1 - c->dying_t / 0.5f;
-    uint32_t col = dr_hsv(c->g.hue, 0.55f, 1), deep = dr_hsv(c->g.hue, 0.8f, 0.8f);
+    uint32_t col = dr_hsv(shown_hue(&c->g), 0.55f, 1), deep = dr_hsv(shown_hue(&c->g), 0.8f, 0.8f);
     float dx = cosf(c->ang), dy = sinf(c->ang);            /* head away from where it is going to bite */
     float tx = -dx, ty = -dy;                              /* the tail */
     float hx = x, hy = y;
@@ -339,7 +352,7 @@ static void draw_cell(const view_t *v, const dish_t *d, const cell_t *c) {
     if (c->state == CS_DYING) {
         float t = c->dying_t / 0.5f;
         fade = 1 - t;
-        v_ring(v, x, y, r * (1 + 1.6f * t), fmaxf(1, r * 0.25f), dr_hsv(c->g.hue, 0.3f, 1), 0.7f * (1 - t));
+        v_ring(v, x, y, r * (1 + 1.6f * t), fmaxf(1, r * 0.25f), dr_hsv(shown_hue(&c->g), 0.3f, 1), 0.7f * (1 - t));
     }
     bool spore = c->state == CS_SPORE;
     if (spore) r *= 0.72f;
@@ -390,7 +403,7 @@ static void draw_cell(const view_t *v, const dish_t *d, const cell_t *c) {
     if (!spore && (c->species == SP_BACILLUS) && c->state != CS_DYING) {
         float L = r * 1.35f, bx = x - dx * L, by = y - dy * L, lx = bx, ly = by;
         float len = r * 4.2f, amp = r * 0.55f;
-        uint32_t fc = dr_hsv(c->g.hue, 0.3f, 1);
+        uint32_t fc = dr_hsv(shown_hue(&c->g), 0.3f, 1);
         for (int k = 1; k <= 14; k++) {
             float t = k / 14.0f, along = len * t, w = sinf(t * 9 - c->phase * 5) * amp * t;
             float nx = bx - dx * along + px * w, ny = by - dy * along + py * w;
@@ -400,8 +413,21 @@ static void draw_cell(const view_t *v, const dish_t *d, const cell_t *c) {
     }
     v_cell(v, sg, n, r, &sh);
     if (c->state == CS_DYING) return;
+    /* a salt-raised strain grows a thick shell: a second wall just outside the first */
+    if (c->g.salt_tol > 0.5f && !spore) {
+        shade_t shell = { 0, dr_hsv(shown_hue(&c->g), 0.12f, 1), 0, 0, 0.35f + (c->g.salt_tol - 0.5f) * 1.6f, 0 };
+        v_cell(v, sg, n, r * (1.12f + (c->g.salt_tol - 0.5f) * 0.4f), &shell);
+    }
+    /* a drug-resistant one wears armor: glinting plates that turn round its wall */
+    if (c->g.drug_res > 0.35f && !spore) {
+        int k = 4 + (int)(c->g.drug_res * 6);
+        for (int m = 0; m < k; m++) {
+            float a = m * TAU / k + d->clock * 0.6f;
+            v_glow(v, x + cosf(a) * r * 1.25f, y + sinf(a) * r * 1.25f, fmaxf(0.9f, r * 0.22f), 0xFFE08A, 0.25f + c->g.drug_res * 0.5f);
+        }
+    }
     /* the insides: a nucleoid, granules, the lamp's glint */
-    uint32_t hue = c->g.hue * 1000 > 0 ? dr_hsv(c->g.hue + 0.06f, 0.35f, 0.9f) : 0xFFFFFF;
+    uint32_t hue = dr_hsv(shown_hue(&c->g) + 0.06f, 0.35f, 0.9f);
     float gr = r * 0.32f;
     if (!spore) {
         v_glow(v, x - dx * r * 0.2f, y - dy * r * 0.2f, r * 0.55f, hue, 0.35f);
@@ -471,11 +497,12 @@ static void draw_world(const view_t *v, const dish_t *d) {
 
 void dish_render(const dish_t *d, uint16_t *fb, int stride) {
     static uint16_t *own;
-    int light = d->light ? 1 : 0;
+    /* the scene is rebuilt only when what it shows changes: the light, the pH or the salt (in steps) */
+    int light = (d->light ? 1 : 0) | (int)(d->ph * 20 + 0.5f) << 1 | (int)(d->salt * 20 + 0.5f) << 6;
     if (g_scene) {
-        if (g_scene_light != light) { scene_build(g_scene, DISH_W, d->light); g_scene_light = light; }
+        if (g_scene_light != light) { scene_build(g_scene, DISH_W, d->light, d->ph, d->salt); g_scene_light = light; }
         for (int y = 0; y < DISH_H; y++) memcpy(&fb[y * stride], &g_scene[y * DISH_W], DISH_W * 2);
-    } else { (void)own; scene_build(fb, stride, d->light); }
+    } else { (void)own; scene_build(fb, stride, d->light, d->ph, d->salt); }
     view_t v = frame_view(fb, stride);
     v.dim = d->light ? 1.0f : 0.55f;
     /* the lamp's glints wander a little round the rim */
@@ -485,6 +512,15 @@ void dish_render(const dish_t *d, uint16_t *fb, int stride) {
         v_glow(&v, x, y, k == 1 ? 9 : 6, 0xDDEBFF, (k == 1 ? 0.6f : 0.35f) * (0.75f + 0.25f * sinf(d->clock * 1.1f + k)));
     }
     draw_world(&v, d);
+    /* the UV lamp: a violet bar over the dish and its rays, flickering */
+    if (d->uv_t > 0) {
+        float k = fminf(1, d->uv_t) * (0.75f + 0.25f * sinf(d->clock * 23));
+        float ty = DISH_CY - DISH_RY + 4;
+        v_line(&v, DISH_CX - 46, ty, DISH_CX + 46, ty, 5, 0xD8B0FF, 0, (int)(255 * k));
+        v_glow(&v, DISH_CX, ty, 60, 0x9A4CFF, 0.6f * k);
+        for (int m = -3; m <= 3; m++)
+            v_line(&v, DISH_CX + m * 12, ty + 4, DISH_CX + m * 52, ty + DISH_RY * 1.1f, 7, 0x7A3CFF, 0.07f * k, 0);
+    }
 }
 
 void dish_render_lens(const dish_t *d, float wx, float wy, float zoom, uint16_t *fb, int stride, float cx, float cy, float rad) {

@@ -27,9 +27,17 @@ void dish_ui_icon_pos(icon_t i, float *x, float *y) {
 typedef struct { int x, y, w, h; } rect_t;
 static bool in_rect(rect_t r, float x, float y) { return x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h; }
 /* the lab: HEAT - +, LIGHT, DONE */
-static rect_t lab_minus(void) { return (rect_t){ PX + 20, PY + 70, 44, 40 }; }
-static rect_t lab_plus(void)  { return (rect_t){ PX + PW - 64, PY + 70, 44, 40 }; }
-static rect_t lab_light(void) { return (rect_t){ PX + 20, PY + 140, PW - 40, 44 }; }
+/* the lab: three dials (HEAT, PH, SALT), then LIGHT / UV / SAMPLES */
+static rect_t dial_minus(int row) { return (rect_t){ PX + 76, PY + 46 + row * 42, 36, 34 }; }
+static rect_t dial_plus(int row)  { return (rect_t){ PX + PW - 52, PY + 46 + row * 42, 36, 34 }; }
+static rect_t lab_btn(int k)      { int w = (PW - 52) / 3; return (rect_t){ PX + 16 + k * (w + 10), PY + 176, w, 34 }; }
+static rect_t lab_minus(void) { return dial_minus(0); }
+static rect_t lab_plus(void)  { return dial_plus(0); }
+static rect_t lab_light(void) { return lab_btn(0); }
+/* the sample rack */
+static const species_t SAMPLES[3] = { SP_SPIRILLUM, SP_CYANO, SP_MYXO };
+static const char *const SAMPLE_SAYS[3] = { "A SPINNING CORKSCREW. LOVES HEAT.", "MAKES ITS OWN FOOD FROM LIGHT.", "A HUNTER: IT EATS OTHER GERMS!" };
+static rect_t sample_row(int k) { return (rect_t){ PX + 16, PY + 48 + k * 56, PW - 32, 50 }; }
 static rect_t page_done(void) { return (rect_t){ (int)DISH_CX - 60, PY + PH - 54, 120, 40 }; }
 /* medicine: the two cures */
 static rect_t meds_drug(void)  { return (rect_t){ PX + 20, PY + 58, PW - 40, 66 }; }
@@ -42,6 +50,10 @@ void dish_ui_hotspot(hotspot_t h, float *x, float *y) {
     case HS_LAB_MINUS: r = lab_minus(); break;   case HS_LAB_PLUS: r = lab_plus(); break;
     case HS_LAB_LIGHT: r = lab_light(); break;   case HS_DONE: r = page_done(); break;
     case HS_MEDS_DRUG: r = meds_drug(); break;   case HS_MEDS_VIRUS: r = meds_virus(); break;
+    case HS_PH_MINUS: r = dial_minus(1); break;   case HS_PH_PLUS: r = dial_plus(1); break;
+    case HS_SALT_MINUS: r = dial_minus(2); break; case HS_SALT_PLUS: r = dial_plus(2); break;
+    case HS_LAB_UV: r = lab_btn(1); break;        case HS_LAB_SAMPLES: r = lab_btn(2); break;
+    case HS_SAMPLE_0: case HS_SAMPLE_1: case HS_SAMPLE_2: r = sample_row(h - HS_SAMPLE_0); break;
     default: r = tool_chip(); break;
     }
     *x = r.x + r.w * 0.5f; *y = r.y + r.h * 0.5f;
@@ -187,13 +199,31 @@ static void page_tap(dish_ui_t *u, dish_t *d, float x, float y) {
     case PAGE_LAB:
         if (in_rect(lab_minus(), x, y)) d->temp = clampf(d->temp - 0.05f, 0.05f, 0.95f);
         else if (in_rect(lab_plus(), x, y)) d->temp = clampf(d->temp + 0.05f, 0.05f, 0.95f);
+        else if (in_rect(dial_minus(1), x, y)) d->ph = clampf(d->ph - 0.05f, 0, 1);
+        else if (in_rect(dial_plus(1), x, y)) d->ph = clampf(d->ph + 0.05f, 0, 1);
+        else if (in_rect(dial_minus(2), x, y)) d->salt = clampf(d->salt - 0.05f, 0, 1);
+        else if (in_rect(dial_plus(2), x, y)) d->salt = clampf(d->salt + 0.05f, 0, 1);
         else if (in_rect(lab_light(), x, y)) d->light = !d->light;
+        else if (in_rect(lab_btn(1), x, y)) { dish_uv(d, 10); u->page = PAGE_NONE; dish_ui_toast(u, "UV ON: WATCH THEM CHANGE!", 3); }
+        else if (in_rect(lab_btn(2), x, y)) u->page = PAGE_SAMPLES;
         else if (in_rect(page_done(), x, y)) u->page = PAGE_NONE;
         break;
     case PAGE_MEDS:
         if (in_rect(meds_drug(), x, y)) { u->page = PAGE_NONE; u->tool = TOOL_DRUG; u->tool_idle = 0; dish_ui_toast(u, "CAREFUL: IT KILLS GOOD GERMS TOO", 3.5f); }
         else if (in_rect(meds_virus(), x, y)) { u->page = PAGE_NONE; dish_antiviral(d); dish_ui_toast(u, "THE VIRUSES ARE GONE", 3); }
         else if (in_rect(page_done(), x, y)) u->page = PAGE_NONE;
+        break;
+    case PAGE_SAMPLES:
+        for (int k = 0; k < 3; k++)
+            if (in_rect(sample_row(k), x, y)) {
+                int s = dish_add_sample(d, SAMPLES[k]);
+                char b[40];
+                if (s >= 0) { snprintf(b, sizeof b, "%s JOINED THE DISH", SPECIES_NAMES[SAMPLES[k]]); u->page = PAGE_NONE; }
+                else snprintf(b, sizeof b, "NO ROOM FOR %s", SPECIES_NAMES[SAMPLES[k]]);
+                dish_ui_toast(u, b, 3);
+                return;
+            }
+        if (in_rect(page_done(), x, y)) u->page = PAGE_LAB;
         break;
     default: u->page = PAGE_NONE;                    /* the card: a tap anywhere closes it */
     }
@@ -344,10 +374,10 @@ static void draw_card(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int st)
     }
     /* what it inherited: the vault genome's traits */
     const genome_t *g = &pet->vault;
-    const char *tn[4] = { "SPEED", "SIZE", "HEAT", "SHIELD" };
-    float tv[4] = { (g->speed - 0.5f) / 1.1f, (g->size - 0.75f) / 0.6f, g->heat_opt, fmaxf(g->drug_res, g->phage_res) };
-    for (int i = 0; i < 4; i++) {
-        int y = PY + 168 + i * 13;
+    const char *tn[5] = { "SPEED", "SIZE", "HEAT", "SALT", "SHIELD" };
+    float tv[5] = { (g->speed - 0.5f) / 1.1f, (g->size - 0.75f) / 0.6f, g->heat_opt, g->salt_tol, fmaxf(g->drug_res, g->phage_res) };
+    for (int i = 0; i < 5; i++) {
+        int y = PY + 166 + i * 12;
         dr_text(fb, st, PX + 18, y, 1, 0x8FB0D8, tn[i]);
         bar(fb, st, PX + 62, y, 54, 7, tv[i], dr_hsv(g->hue, 0.5f, 1));
     }
@@ -359,27 +389,54 @@ static void draw_card(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int st)
     dr_text(fb, st, nx, PY + 224, 1, 0x8FB0D8, b);
     text_c(fb, st, DISH_CX, PY + PH - 20, 1, 0x5C7598, "TAP TO CLOSE");
 }
-static void draw_lab(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int st) {
-    panel(fb, st, PX, PY, PW, PH);
-    text_c(fb, st, DISH_CX, PY + 18, 3, 0xFFFFFF, "THE LAB");
-    text_c(fb, st, DISH_CX, PY + 50, 1, 0x8FB0D8, "HOW WARM IS THE DISH?");
-    button(fb, st, lab_minus(), 0x10305A, 0x5C9AE0, "-", 3);
-    button(fb, st, lab_plus(), 0x5A2010, 0xE08A5C, "+", 3);
-    /* the thermometer: cold blue to hot red, the pet's favourite marked */
-    rect_t m = lab_minus(), p = lab_plus();
-    int tx = m.x + m.w + 12, tw = p.x - 12 - tx, ty = m.y + 14;
+/* a dial: - [gradient track with the pet's mark] + */
+static void dial(uint16_t *fb, int st, int row, const char *label, float v, float mark, const char *mark_label, uint32_t mark_col, int kind) {
+    rect_t m = dial_minus(row), p = dial_plus(row);
+    dr_text(fb, st, PX + 16, m.y + 10, 2, 0xC8D8F0, label);
+    button(fb, st, m, 0x10203A, 0x5C7598, "-", 3);
+    button(fb, st, p, 0x10203A, 0x5C7598, "+", 3);
+    int tx = m.x + m.w + 10, tw = p.x - 10 - tx, ty = m.y + 11;
     for (int k = 0; k < tw; k++) {
         float t = k / (float)tw;
-        dr_rect(fb, st, tx + k, ty, 1, 12, t < 0.5f ? dr_hsv(0.6f - t * 0.3f, 0.8f, 0.9f) : dr_hsv(0.12f - (t - 0.5f) * 0.24f, 0.85f, 1), 255);
+        uint32_t c = kind == 0 ? (t < 0.5f ? dr_hsv(0.6f - t * 0.3f, 0.8f, 0.9f) : dr_hsv(0.12f - (t - 0.5f) * 0.24f, 0.85f, 1))   /* cold..hot */
+                   : kind == 1 ? dr_hsv(t * 0.78f, 0.8f, 0.95f)                                                                    /* the indicator: red..green..violet */
+                   : dr_hsv(0.58f, 0.25f * (1 - t), 0.3f + 0.7f * t);                                                             /* fresh..brine */
+        dr_rect(fb, st, tx + k, ty, 1, 12, c, 255);
     }
-    float fav = d->strain[DISH_PET].vault.heat_opt;
-    dr_line(fb, st, tx + tw * fav, ty - 6, tx + tw * fav, ty + 18, 2, 0x4CF08C, 255);
-    dr_disc(fb, st, tx + tw * d->temp, ty + 6, 9, 0xFFFFFF, 255);
-    dr_glow(fb, st, tx + tw * d->temp, ty + 6, 16, 0xFFFFFF, 90);
-    text_c(fb, st, tx + tw * fav, ty + 22, 1, 0x4CF08C, "BEST");
-    button(fb, st, lab_light(), d->light ? 0x4A4010 : 0x101828, d->light ? 0xFFE07A : 0x5C7598, d->light ? "LIGHT: ON" : "LIGHT: OFF", 2);
+    float mx = tx + tw * clampf(mark, 0, 1);
+    dr_line(fb, st, mx, ty - 5, mx, ty + 17, 2, mark_col, 255);
+    text_c(fb, st, mx, ty + 20, 1, mark_col, mark_label);
+    dr_disc(fb, st, tx + tw * v, ty + 6, 8, 0xFFFFFF, 255);
+    dr_glow(fb, st, tx + tw * v, ty + 6, 15, 0xFFFFFF, 90);
+}
+static void draw_lab(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int st) {
+    const genome_t *g = &d->strain[DISH_PET].vault;
+    panel(fb, st, PX, PY, PW, PH);
+    text_c(fb, st, DISH_CX, PY + 14, 3, 0xFFFFFF, "THE LAB");
+    dial(fb, st, 0, "HEAT", d->temp, g->heat_opt, "BEST", 0x4CF08C, 0);
+    dial(fb, st, 1, "PH", d->ph, g->ph_opt, "BEST", 0x4CF08C, 1);
+    dial(fb, st, 2, "SALT", d->salt, 0.25f + g->salt_tol * 0.6f, "TOO MUCH", 0xFF6E7A, 2);
+    button(fb, st, lab_btn(0), d->light ? 0x4A4010 : 0x101828, d->light ? 0xFFE07A : 0x5C7598, d->light ? "LIGHT" : "DARK", 2);
+    button(fb, st, lab_btn(1), d->uv_t > 0 ? 0x3A1060 : 0x1A1030, 0xB07CFF, "UV", 2);
+    button(fb, st, lab_btn(2), 0x103A30, 0x5CE0B0, "GERMS", 2);
     button(fb, st, page_done(), 0x10304A, 0x5CC8E0, "DONE", 2);
     (void)u;
+}
+static void draw_samples(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int st) {
+    panel(fb, st, PX, PY, PW, PH);
+    text_c(fb, st, DISH_CX, PY + 14, 3, 0xFFFFFF, "NEW GERMS");
+    for (int k = 0; k < 3; k++) {
+        rect_t r = sample_row(k);
+        bool here = false;
+        for (int s = 0; s < DISH_MAX_STRAINS; s++) if (d->strain[s].used && d->strain[s].species == SAMPLES[k]) here = true;
+        genome_t g = dish_species_genome(SAMPLES[k]);
+        button(fb, st, r, here ? 0x0C1424 : 0x102A3A, here ? 0x2A3A50 : dr_hsv(g.hue, 0.5f, 0.9f), NULL, 2);
+        dr_disc(fb, st, r.x + 28, r.y + r.h * 0.5f, 20, 0x03050A, 255);
+        dr_cell_icon(fb, st, SAMPLES[k], &g, r.x + 28, r.y + r.h * 0.5f, 2.4f, u->clock * 0.3f, u->clock, false, 19);
+        dr_text(fb, st, r.x + 58, r.y + 10, 2, here ? 0x5C7598 : 0xFFFFFF, SPECIES_NAMES[SAMPLES[k]]);
+        dr_text(fb, st, r.x + 58, r.y + 32, 1, here ? 0x5C7598 : 0xB8E8D8, here ? "ALREADY IN THE DISH" : SAMPLE_SAYS[k]);
+    }
+    button(fb, st, page_done(), 0x10304A, 0x5CC8E0, "BACK", 2);
 }
 static void draw_meds(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int st) {
     panel(fb, st, PX, PY, PW, PH);
@@ -438,7 +495,7 @@ void dish_ui_render(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int st) {
     }
     /* the top: the pet's name and its mood */
     if (u->page == PAGE_NONE) {
-        int ty = (int)(DISH_CY - DISH_RY + 14);
+        int ty = (int)(DISH_CY - DISH_RY + 14) + (d->uv_t > 0 ? 18 : 0);   /* (out from under the UV lamp) */
         snprintf(b, sizeof b, "%s", pet->name);
         int w = dr_text_w(b, 2);
         float fx = DISH_CX + w * 0.5f + 14;
@@ -491,6 +548,7 @@ void dish_ui_render(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int st) {
     case PAGE_CARD: draw_card(u, d, fb, st); break;
     case PAGE_LAB:  draw_lab(u, d, fb, st); break;
     case PAGE_MEDS: draw_meds(u, d, fb, st); break;
+    case PAGE_SAMPLES: draw_samples(u, d, fb, st); break;
     default: break;
     }
 }

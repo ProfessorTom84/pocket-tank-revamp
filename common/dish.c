@@ -24,7 +24,7 @@ static const sp_info_t SP[SP_COUNT] = {
     [SP_BACILLUS]  = { 4.6f, 30, 0.0050f, 0.032f, 0,      0,    false, false },
     [SP_SPIRILLUM] = { 3.4f, 40, 0.0060f, 0.030f, 0,      0,    false, false },
     [SP_CYANO]     = { 4.2f,  4, 0.0030f, 0.008f, 0.006f, 0,    true,  false },
-    [SP_MYXO]      = { 3.8f, 20, 0.0050f, 0.010f, 0,      0.5f, false, false },
+    [SP_MYXO]      = { 3.8f, 20, 0.0050f, 0.010f, 0,      0.12f, false, false },
     [SP_PHAGE]     = { 2.8f,  9, 0,       0,     0,      0,    false, true  },
 };
 
@@ -131,7 +131,9 @@ static void parts_tick(dish_t *d, float dt) {
 genome_t dish_species_genome(species_t sp) {
     static const float HUE[SP_COUNT] = { 0.08f, 0.52f, 0.86f, 0.33f, 0.14f, 0.74f };
     static const float HEAT[SP_COUNT] = { 0.45f, 0.5f, 0.68f, 0.52f, 0.5f, 0.5f };
-    genome_t g = { 1, 1, HUE[sp], HEAT[sp], sp == SP_COCCUS ? 0.6f : 0.3f, 0.05f, 0.15f, 1 };
+    static const float PH[SP_COUNT]   = { 0.5f, 0.55f, 0.42f, 0.62f, 0.5f, 0.5f };
+    static const float SALT[SP_COUNT] = { 0.65f, 0.3f, 0.3f, 0.45f, 0.35f, 1 };   /* coccus: salt-hardy, like a staph */
+    genome_t g = { 1, 1, HUE[sp], HEAT[sp], SALT[sp], 0.05f, 0.15f, 1, PH[sp] };
     return g;
 }
 static float mut(dish_t *d, float v, float sd, float lo, float hi) {
@@ -147,9 +149,10 @@ static genome_t mutate(dish_t *d, const genome_t *p, float rate) {
     g.hue      -= floorf(g.hue);
     g.heat_opt  = mut(d, g.heat_opt, 0.02f * rate, 0.05f, 0.95f);
     g.salt_tol  = mut(d, g.salt_tol, 0.02f * rate, 0, 1);
-    g.drug_res  = mut(d, g.drug_res, 0.025f * rate, 0, 1);
-    g.phage_res = mut(d, g.phage_res, 0.025f * rate, 0, 0.95f);
+    g.drug_res  = mut(d, g.drug_res, 0.04f * rate, 0, 1);
+    g.phage_res = mut(d, g.phage_res, 0.04f * rate, 0, 0.95f);
     g.div_rate  = mut(d, g.div_rate, 0.03f * rate, 0.6f, 1.6f);
+    g.ph_opt    = mut(d, g.ph_opt, 0.02f * rate, 0, 1);
     return g;
 }
 
@@ -205,7 +208,7 @@ void dish_init(dish_t *d, uint32_t seed, species_t pet, const char *pet_name) {
     memset(d, 0, sizeof *d);
     d->rng = seed ? seed : 0x2545F491u;
     field_mask();
-    d->temp = 0.5f; d->light = true;
+    d->temp = 0.5f; d->ph = 0.5f; d->salt = 0.2f; d->light = true;
     d->outbreak_t = dish_rand(d, 240, 480);
     for (int c = 0; c < FIELD_N * FIELD_N; c++) if (g_in[c]) d->nutr[c] = 0.12f;   /* fresh agar: a little to start on */
     int ps = dish_add_strain(d, pet, pet_name);
@@ -257,6 +260,19 @@ void dish_wipe(dish_t *d, float x, float y, float r) {
             float ex = (i + 0.5f) * FCW - x, ey = (j + 0.5f) * FCH - y;
             if (ex * ex + ey * ey < r * r) d->waste[j * FIELD_N + i] *= 0.2f;
         }
+}
+void dish_uv(dish_t *d, float seconds) { d->uv_t = seconds; }
+static int strain_of(const dish_t *d, species_t sp);
+int dish_add_sample(dish_t *d, species_t sp) {
+    if (strain_of(d, sp) >= 0) return -1;
+    int s = dish_add_strain(d, sp, NULL);
+    if (s < 0) return -1;
+    float a = dish_rand(d, 0, TAU), x = DISH_CX + cosf(a) * DISH_RX * 0.45f, y = DISH_CY + sinf(a) * DISH_RY * 0.45f;
+    seed_colony(d, s, sp == SP_MYXO ? 4 : 6, x, y, 16, NULL);
+    for (int i = 0; i < DISH_MAX_CELLS; i++) if (d->cell[i].strain == s && d->cell[i].state == CS_LIVE) d->cell[i].energy = 0.8f;
+    splat(d->nutr, x, y, 0.3f, 22, 1.0f);
+    part_add(d, PT_DROP, x, y, 0, 0, 0.35f, 0xBFFFD0);
+    return s;
 }
 static int strain_of(const dish_t *d, species_t sp) {
     for (int s = 0; s < DISH_MAX_STRAINS; s++) if (d->strain[s].used && d->strain[s].species == sp) return s;
@@ -322,7 +338,7 @@ static void divide(dish_t *d, int i) {
     float r = dish_cell_radius(c);
     float ax = cosf(c->ang), ay = sinf(c->ang);
     cell_t parent = *c;
-    float rate = d->strain[c->strain].strat.id == ST_SPREAD ? 1.5f : 1.0f;
+    float rate = (d->strain[c->strain].strat.id == ST_SPREAD ? 1.5f : 1.0f) * (d->uv_t > 0 ? 5.0f : 1.0f);
     genome_t g = mutate(d, &parent.g, rate);
     int j = dish_spawn(d, c->strain, c->x + ax * r, c->y + ay * r, &g);
     c = &d->cell[i];                              /* (same pool; the pointer is still good) */
@@ -353,13 +369,25 @@ static float danger_at(const dish_t *d, const cell_t *c, float x, float y) {
     float m = fabsf(local_temp(d, x, y) - c->g.heat_opt);
     return dish_field(d->drug, x, y) * (1 - c->g.drug_res) + dish_field(d->waste, x, y) * 0.6f + (m > 0.15f ? m : 0);
 }
+/* what the dish itself does to a cell: too hot or cold, too sour or soapy,
+ * too salty, the UV lamp. The same numbers are its comfort (the pet's need). */
+float dish_stress(const dish_t *d, const cell_t *c, float *comfort) {
+    float mt = fabsf(local_temp(d, c->x, c->y) - c->g.heat_opt);
+    float mp = fabsf(d->ph - c->g.ph_opt);
+    float ms = d->salt - (0.25f + c->g.salt_tol * 0.6f);          /* salt hurts only above what it tolerates */
+    float ct = 1 - mt * 2.2f, cp = 1 - mp * 2.2f, cs = 1 - (ms > 0 ? ms * 3 : 0);
+    if (comfort) *comfort = clampf(fminf(ct, fminf(cp, cs)), 0, 1);
+    return (mt > 0.2f ? (mt - 0.2f) * 0.35f : 0) + (mp > 0.22f ? (mp - 0.22f) * 0.35f : 0)
+         + (ms > 0 ? ms * 0.5f : 0) + (d->uv_t > 0 ? 0.008f : 0);
+}
 
 static void cell_tick(dish_t *d, int i, float dt) {
     cell_t *c = &d->cell[i];
     const sp_info_t *sp = &SP[c->species];
     strain_t *st = &d->strain[c->strain];
     int strat = st->strat.id;
-    c->age += dt; c->phase += dt * (2.0f + c->g.speed * 3);
+    if (c->state != CS_SPORE) c->age += dt;      /* spores don't age */
+    c->phase += dt * (2.0f + c->g.speed * 3);
 
     if (c->state == CS_DYING) {
         c->dying_t += dt;
@@ -393,9 +421,7 @@ static void cell_tick(dish_t *d, int i, float dt) {
     }
 
     /* ---- metabolism, food, the light ---- */
-    float tloc = local_temp(d, c->x, c->y);
-    float mis = fabsf(tloc - c->g.heat_opt);
-    float comfort = clampf(1 - mis * 2.2f, 0, 1);
+    float comfort, env = dish_stress(d, c, &comfort);
     float metab = sp->metab * (0.6f + 0.4f * c->g.speed * c->g.size) * (strat == ST_REST ? 0.45f : 1) * (spore ? 0.05f : 1);
     if (!sp->virus) {
         c->energy -= metab * dt;
@@ -410,14 +436,17 @@ static void cell_tick(dish_t *d, int i, float dt) {
             d->waste[fc] = clampf(d->waste[fc] + dt * 0.0010f, 0, 1);
         }
         /* health: what hurts, what heals */
-        float dmg = (mis > 0.2f ? (mis - 0.2f) * 0.35f : 0)
-                  + dish_field(d->drug, c->x, c->y) * (1 - c->g.drug_res) * 0.45f
+        float dmg = env
+                  + dish_field(d->drug, c->x, c->y) * (1 - c->g.drug_res) * (1 - c->g.drug_res) * 0.6f   /* squared: a little resistance goes a long way */
                   + fmaxf(0, dish_field(d->waste, c->x, c->y) - 0.45f) * 0.12f;
+        /* old age: past its span (6-9 minutes) a cell slowly fails, so a full dish keeps turning over and evolving */
+        bool old = c->age > 360 + 180 * (((uint32_t)i * 2654435761u >> 16) & 1023) / 1023.0f;
+        if (old) dmg += 0.006f;
         if (spore) dmg *= 0.08f;
         /* one phage's payload is a cold a healthy cell shakes off; two take hold */
         if (c->infect >= 0.5f) { c->infect += dt * 0.05f; c->energy -= dt * 0.006f; }
         else if (c->infect > 0) c->infect = fmaxf(0, c->infect - dt * 0.03f * c->health);
-        c->health = clampf(c->health - dmg * dt + (dmg < 0.01f && c->energy > 0.3f ? 0.03f * dt : 0), 0, 1);
+        c->health = clampf(c->health - dmg * dt + (dmg < 0.01f && !old && c->energy > 0.3f ? 0.03f * dt : 0), 0, 1);   /* the old don't heal */
         if (c->infect >= 1) {                       /* the burst: new phages pour out */
             int ps = strain_of(d, SP_PHAGE);
             float hx = c->x, hy = c->y;
@@ -436,7 +465,7 @@ static void cell_tick(dish_t *d, int i, float dt) {
 
     /* ---- division ---- */
     if (!sp->virus && !spore) {
-        float need = 1.0f - 0.15f * (c->g.div_rate - 1) - (strat == ST_DIVIDE ? 0.15f : 0);
+        float need = 0.85f - 0.15f * (c->g.div_rate - 1) - (strat == ST_DIVIDE ? 0.12f : 0);   /* generations come quick enough to watch evolution in an afternoon */
         if (c->div_t > 0) {
             c->div_t += dt * c->g.div_rate;
             if (c->div_t >= DIV_TIME) { divide(d, i); return; }
@@ -503,8 +532,8 @@ static void cell_tick(dish_t *d, int i, float dt) {
                     else if (sp->adhesive && o->strain == c->strain && dd < rr * 1.35f) {
                         float pull = (dd - rr * 1.02f) * 4; px -= dx / dd * pull; py -= dy / dd * pull;
                     }
-                    if (sp->prey > 0 && o->strain != c->strain && dd < rr + 1 && o->state == CS_LIVE) {
-                        o->health -= sp->prey * dt; c->energy += sp->prey * 0.5f * dt;   /* myxo feeds on what it touches */
+                    if (sp->prey > 0 && strat == ST_HUNT && o->strain != c->strain && dd < rr + 1 && o->state == CS_LIVE) {
+                        o->health -= sp->prey * dt; c->energy += sp->prey * 0.07f * dt;  /* myxo feeds on what it touches, while it hunts */
                     }
                     if (sp->prey > 0 && o->strain != c->strain && dd2 < prey_d) { prey_d = dd2; prey = j; }
                 } else if (sp->virus && !o_virus && !c->host && o->state == CS_LIVE) {
@@ -571,8 +600,8 @@ static void census(dish_t *d) {
         if (c->state == CS_DYING) continue;
         int s = c->strain; cnt[s]++;
         if (c->state == CS_SPORE) spores[s]++;
-        float mis = fabsf(local_temp(d, c->x, c->y) - c->g.heat_opt);
-        acc[s][0] += c->energy; acc[s][1] += c->health; acc[s][2] += clampf(1 - mis * 2.2f, 0, 1);
+        float cf; dish_stress(d, c, &cf);
+        acc[s][0] += c->energy; acc[s][1] += c->health; acc[s][2] += cf;
         acc[s][3] += dish_field(d->waste, c->x, c->y); acc[s][4] += c->infect > 0;
         acc[s][5] += c->x; acc[s][6] += c->y;
         int gx = (int)(c->x / GRID_PX), gy = (int)(c->y / GRID_PX), n = 0;
@@ -651,6 +680,7 @@ void dish_tick(dish_t *d, float dt, dish_brain_fn brain) {
     diffuse(d->waste, 0.15f * dt);
     diffuse(d->drug, 0.5f * dt);
     d->warm *= expf(-0.5f * dt);
+    if (d->uv_t > 0) d->uv_t -= dt;
     if (d->scare_t > 0) d->scare_t -= dt;
     parts_tick(d, dt);
 
@@ -681,14 +711,16 @@ static void r_bytes(rbuf_t *r, void *v, size_t n) {
 }
 static float r_q8(rbuf_t *r, float lo, float hi) { uint8_t b; r_bytes(r, &b, 1); return lo + (hi - lo) * b / 255.0f; }
 static float r_u16(rbuf_t *r, float lo, float hi) { uint16_t b; r_bytes(r, &b, 2); return lo + (hi - lo) * b / 65535.0f; }
-static const float GLO[8] = { 0.5f, 0.75f, 0, 0, 0, 0, 0, 0.6f }, GHI[8] = { 1.6f, 1.35f, 1, 1, 1, 1, 1, 1.6f };
+#define GENES ((int)(sizeof(genome_t) / sizeof(float)))
+static const float GLO[GENES] = { 0.5f, 0.75f, 0, 0, 0, 0, 0, 0.6f, 0 }, GHI[GENES] = { 1.6f, 1.35f, 1, 1, 1, 1, 1, 1.6f, 1 };
 
 size_t dish_save(const dish_t *d, uint8_t *out, size_t cap) {
     wbuf_t w = { out, 0, cap, true };
-    uint32_t magic = SAVE_MAGIC; uint16_t ver = 1;
+    uint32_t magic = SAVE_MAGIC; uint16_t ver = 2;   /* v2 (phase 3): pH, salt, ph_opt - nothing shipped v1, so it is refused */
     w_bytes(&w, &magic, 4); w_bytes(&w, &ver, 2);
     w_bytes(&w, &d->temp, 4); w_bytes(&w, &d->clock, 4); w_bytes(&w, &d->outbreak_t, 4);
     uint8_t light = d->light; w_bytes(&w, &light, 1);
+    w_bytes(&w, &d->ph, 4); w_bytes(&w, &d->salt, 4);
     for (int s = 0; s < DISH_MAX_STRAINS; s++) {
         const strain_t *st = &d->strain[s];
         uint8_t used = st->used, sp = st->species, strat = st->strat.id;
@@ -709,7 +741,7 @@ size_t dish_save(const dish_t *d, uint8_t *out, size_t cap) {
         w_u16(&w, c->x, 0, DISH_W); w_u16(&w, c->y, 0, DISH_H);
         w_q8(&w, c->energy, 0, 1.1f); w_q8(&w, c->health, 0, 1); w_q8(&w, c->infect, 0, 1); w_q8(&w, fmodf(c->ang + 100 * TAU, TAU), 0, TAU);
         const float *g = &c->g.speed;
-        for (int k = 0; k < 8; k++) w_q8(&w, g[k], GLO[k], GHI[k]);
+        for (int k = 0; k < GENES; k++) w_q8(&w, g[k], GLO[k], GHI[k]);
     }
     return w.ok ? w.n : 0;
 }
@@ -718,7 +750,7 @@ bool dish_load(dish_t *d, const uint8_t *in, size_t len, uint32_t seed) {
     rbuf_t r = { in, 0, len, true };
     uint32_t magic; uint16_t ver;
     r_bytes(&r, &magic, 4); r_bytes(&r, &ver, 2);
-    if (!r.ok || magic != SAVE_MAGIC || ver < 1) return false;
+    if (!r.ok || magic != SAVE_MAGIC || ver < 2) return false;
     /* load beside, so a bad save leaves the dish alone.
      * ponytail: a second dish_t (~45 KB) in .bss; on the device mark it EXT_RAM_BSS_ATTR (PSRAM) */
     static dish_t nd;
@@ -727,6 +759,7 @@ bool dish_load(dish_t *d, const uint8_t *in, size_t len, uint32_t seed) {
     field_mask();
     r_bytes(&r, &nd.temp, 4); r_bytes(&r, &nd.clock, 4); r_bytes(&r, &nd.outbreak_t, 4);
     uint8_t light; r_bytes(&r, &light, 1); nd.light = light;
+    r_bytes(&r, &nd.ph, 4); r_bytes(&r, &nd.salt, 4);
     for (int s = 0; s < DISH_MAX_STRAINS; s++) {
         strain_t *st = &nd.strain[s];
         uint8_t used, sp, strat;
@@ -748,7 +781,7 @@ bool dish_load(dish_t *d, const uint8_t *in, size_t len, uint32_t seed) {
         c->x = r_u16(&r, 0, DISH_W); c->y = r_u16(&r, 0, DISH_H);
         c->energy = r_q8(&r, 0, 1.1f); c->health = r_q8(&r, 0, 1); c->infect = r_q8(&r, 0, 1); c->ang = r_q8(&r, 0, TAU);
         float *g = &c->g.speed;
-        for (int k = 0; k < 8; k++) g[k] = r_q8(&r, GLO[k], GHI[k]);
+        for (int k = 0; k < GENES; k++) g[k] = r_q8(&r, GLO[k], GHI[k]);
         c->phase = dish_rand(&nd, 0, TAU); c->run_t = dish_rand(&nd, 0.2f, 1.5f);
         if (!nd.strain[c->strain].used) c->state = CS_FREE;
     }

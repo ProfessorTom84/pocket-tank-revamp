@@ -85,7 +85,7 @@ dish: $(DISH_OUT)
 $(DISH_OUT): $(DISH_SRCS) $(wildcard ../common/dish*.h)
 	$(CC) $(ROUNDF) -O2 -std=c11 -I../common -Wall -Wextra -Wno-unused-parameter $(DISH_SDL) -o $@ $(DISH_SRCS) $(DISH_LIBS) -lm
 dish-check: $(DISH_OUT)
-	./$(DISH_OUT) --selftest-dish && ./$(DISH_OUT) --selftest-pet
+	./$(DISH_OUT) --selftest-dish && ./$(DISH_OUT) --selftest-pet && ./$(DISH_OUT) --selftest-evolve
 dish-check-all:
 	$(MAKE) dish-check
 	$(MAKE) ROUND=1 dish-check

@@ -11,6 +11,7 @@
 #include <string.h>
 #include <math.h>
 #include <time.h>
+#include <stddef.h>
 
 static dish_t dish;
 static dish_ui_t ui;
@@ -130,6 +131,28 @@ static int snapshot(const char *pre) {
     /* extinct: the vault */
     for (int i = 0; i < DISH_MAX_CELLS; i++) if (dish.cell[i].strain == DISH_PET && dish.cell[i].state != CS_FREE) dish.cell[i].state = CS_DYING;
     run(&dish, 8, 0, false); shot(pre, "extinct");
+    /* phase 3: the lab, the rack, the new germs, evolved looks */
+    run(&dish, 25, 10, false);
+    tap_icon(ICON_LAB);
+    float hx, hy; dish_ui_hotspot(HS_PH_MINUS, &hx, &hy); tap_at(hx, hy); tap_at(hx, hy);
+    dish_ui_hotspot(HS_SALT_PLUS, &hx, &hy); tap_at(hx, hy); tap_at(hx, hy); tap_at(hx, hy);
+    shot(pre, "lab3");
+    dish_ui_hotspot(HS_LAB_SAMPLES, &hx, &hy); tap_at(hx, hy); shot(pre, "samples");
+    ui.page = PAGE_NONE;
+    for (int k = 0; k < 3; k++) { tap_icon(ICON_LAB); dish_ui_hotspot(HS_LAB_SAMPLES, &hx, &hy); tap_at(hx, hy); dish_ui_hotspot((hotspot_t)(HS_SAMPLE_0 + k), &hx, &hy); tap_at(hx, hy); }
+    run(&dish, 90, 10, false);
+    /* show off evolution: a warm-raised, salt-shelled, drug-armored pet */
+    for (int i = 0; i < DISH_MAX_CELLS; i++) {
+        cell_t *c = &dish.cell[i];
+        if (c->strain != DISH_PET) continue;
+        c->g.heat_opt = 0.5f + (i % 3) * 0.12f; c->g.salt_tol = 0.5f + (i % 4) * 0.12f; c->g.drug_res = (i % 2) * 0.7f;
+    }
+    dish_uv(&dish, 5);
+    run(&dish, 0.5f, 0, false); shot(pre, "zoo");
+    const strain_t *pet = &dish.strain[DISH_PET];
+    int ci = -1; for (int i = 0; i < DISH_MAX_CELLS; i++) if (dish.cell[i].strain == DISH_PET && dish.cell[i].state == CS_LIVE && dish.cell[i].g.drug_res > 0.5f && dish.cell[i].g.salt_tol > 0.7f) { ci = i; break; }
+    (void)pet;
+    if (ci >= 0) { ui.lens = ci; ui.lens_gen = dish.cell[ci].gen; shot(pre, "evolved"); }
     return 0;
 }
 
@@ -252,10 +275,62 @@ static int window(bool fresh) {
 }
 #endif
 
+/* the pet's mean of one gene over its living cells */
+static float pet_mean(const dish_t *d, size_t off) {
+    float s = 0; int n = 0;
+    for (int i = 0; i < DISH_MAX_CELLS; i++) {
+        const cell_t *c = &d->cell[i];
+        if (c->strain != DISH_PET || (c->state != CS_LIVE && c->state != CS_SPORE)) continue;
+        s += *(const float *)((const char *)&c->g + off); n++;
+    }
+    return n ? s / n : *(const float *)((const char *)&d->strain[DISH_PET].vault + off);
+}
+/* `minutes` of a fed dish; with `dose`, antibiotic on the colony every 30 s and the UV lamp now and then */
+static float evolve(uint32_t seed, float minutes, bool dose, unsigned *gens) {
+    dish_init(&dish, seed, SP_BACILLUS, "BLIP");
+    for (float t = 0; t < minutes * 60; t += 30) {
+        const strain_t *pet = &dish.strain[DISH_PET];
+        if (dose && pet->count > 0 && t > 60) dish_dose(&dish, pet->cx, pet->cy, 0.3f);   /* sublethal: most live, the weakest don't */
+        if (dose && (int)t % 300 == 0) dish_uv(&dish, 10);
+        run(&dish, 30, 15, false);
+    }
+    *gens = dish.strain[DISH_PET].max_gen;
+    return pet_mean(&dish, offsetof(genome_t, drug_res));
+}
+static int selftest_evolve(void) {
+    unsigned g0 = 0, g1 = 0, g;
+    float base = dish_species_genome(SP_BACILLUS).drug_res, ctrl = 0, treated = 0;
+    for (uint32_t seed = 31; seed < 61; seed += 10) {   /* three dishes each way: evolution is chancy, the trend is not */
+        ctrl += evolve(seed, 40, false, &g) / 3; g0 += g;
+        treated += evolve(seed, 40, true, &g) / 3; g1 += g;
+    }
+    printf("drug resistance: starts %.3f, untreated %.3f (gen %u), treated %.3f (gen %u)\n", base, ctrl, g0, treated, g1);
+    CHECK(treated > ctrl + 0.08f, "antibiotic pressure did not select for resistance (%.3f vs %.3f)", treated, ctrl);
+    /* comfort: a dish too sour for the pet hurts it; set right, it recovers */
+    dish_init(&dish, 33, SP_BACILLUS, "BLIP");
+    run(&dish, 30, 15, false);
+    dish.ph = 0.05f; run(&dish, 20, 15, false);
+    CHECK(dish.strain[DISH_PET].comfort < 0.3f, "a sour dish left the pet comfortable (%.2f)", dish.strain[DISH_PET].comfort);
+    dish.ph = 0.5f; run(&dish, 20, 15, false);
+    CHECK(dish.strain[DISH_PET].count == 0 || dish.strain[DISH_PET].comfort > 0.7f, "a neutral dish did not comfort the pet");
+    /* the samples join, once each */
+    CHECK(dish_add_sample(&dish, SP_CYANO) >= 0, "the cyano sample did not join");
+    CHECK(dish_add_sample(&dish, SP_CYANO) < 0, "a second cyano colony joined");
+    int cy = 0; for (int s = 0; s < DISH_MAX_STRAINS; s++) if (dish.strain[s].used && dish.strain[s].species == SP_CYANO) cy = s;
+    int my = dish_add_sample(&dish, SP_MYXO);
+    CHECK(my >= 0, "the myxo sample did not join");
+    run(&dish, 240, 20, false);
+    printf("after 4 min: pet %d, myxo %d, cyano %d\n", dish.strain[DISH_PET].count, dish.strain[my].count, dish.strain[cy].count);
+    CHECK(dish.strain[cy].count + dish.strain[DISH_PET].count > 0, "the hunters ate everything in four minutes");
+    printf("selftest-evolve: %s\n", fails ? "FAILED" : "ok");
+    return fails ? 1 : 0;
+}
+
 int main(int argc, char **argv) {
     for (int a = 1; a < argc; a++) {
         if (!strcmp(argv[a], "--selftest-dish")) return selftest_dish();
         if (!strcmp(argv[a], "--selftest-pet")) return selftest_pet();
+        if (!strcmp(argv[a], "--selftest-evolve")) return selftest_evolve();
         if (!strcmp(argv[a], "--bench")) {          /* render cost on a busy dish: the number to compare with the device */
             dish_render_set_scene(scene);
             dish_init(&dish, 3, SP_BACILLUS, "BLIP"); dish_ui_init(&ui);
