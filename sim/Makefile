@@ -75,7 +75,7 @@ check-nomodel:
 # `make dish` -> ./dishsim: headless always (selftests, --snapshot); a window too
 # when sdl2-config is found. ROUND=1 / WATCH=1 / SQUARE=1 pick the glass as above.
 # Native arch (no $(ARCH)): it needs no LVGL and links a native SDL2 if there is one.
-DISH_SRCS := dish_main.c ../common/dish.c ../common/dish_brain.c ../common/dish_render.c ../common/dish_ui.c
+DISH_SRCS := dish_main.c ../common/dish.c ../common/dish_brain.c ../common/dish_render.c ../common/dish_ui.c ../common/dish_prog.c
 DISH_OUT  := $(subst fishsim,dishsim,$(OUT))
 ifneq ($(shell command -v sdl2-config 2>/dev/null),)
 DISH_SDL  := -DDISH_SDL $(SDL_CFLAGS)
@@ -85,7 +85,7 @@ dish: $(DISH_OUT)
 $(DISH_OUT): $(DISH_SRCS) $(wildcard ../common/dish*.h)
 	$(CC) $(ROUNDF) -O2 -std=c11 -I../common -Wall -Wextra -Wno-unused-parameter $(DISH_SDL) -o $@ $(DISH_SRCS) $(DISH_LIBS) -lm
 dish-check: $(DISH_OUT)
-	./$(DISH_OUT) --selftest-dish && ./$(DISH_OUT) --selftest-pet && ./$(DISH_OUT) --selftest-evolve
+	./$(DISH_OUT) --selftest-dish && ./$(DISH_OUT) --selftest-pet && ./$(DISH_OUT) --selftest-evolve && ./$(DISH_OUT) --selftest-prog
 dish-check-all:
 	$(MAKE) dish-check
 	$(MAKE) ROUND=1 dish-check

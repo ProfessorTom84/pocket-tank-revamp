@@ -6,6 +6,7 @@
 #include "dish.h"
 #include "dish_render.h"
 #include "dish_ui.h"
+#include "dish_prog.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -133,6 +134,10 @@ static int snapshot(const char *pre) {
     run(&dish, 8, 0, false); shot(pre, "extinct");
     /* phase 3: the lab, the rack, the new germs, evolved looks */
     run(&dish, 25, 10, false);
+    ui.page = PAGE_NONE; dish.dna = 70;
+    tap_icon(ICON_LAB); shot(pre, "lab_locked");
+    float lx0, ly0; dish_ui_hotspot(HS_PH_PLUS, &lx0, &ly0); tap_at(lx0, ly0); ui.page = PAGE_NONE;   /* unlock the pH dial with the DNA */
+    dish.unlocked = ~0u; ui.toast_t = 0;
     tap_icon(ICON_LAB);
     float hx, hy; dish_ui_hotspot(HS_PH_MINUS, &hx, &hy); tap_at(hx, hy); tap_at(hx, hy);
     dish_ui_hotspot(HS_SALT_PLUS, &hx, &hy); tap_at(hx, hy); tap_at(hx, hy); tap_at(hx, hy);
@@ -153,6 +158,23 @@ static int snapshot(const char *pre) {
     int ci = -1; for (int i = 0; i < DISH_MAX_CELLS; i++) if (dish.cell[i].strain == DISH_PET && dish.cell[i].state == CS_LIVE && dish.cell[i].g.drug_res > 0.5f && dish.cell[i].g.salt_tol > 0.7f) { ci = i; break; }
     (void)pet;
     if (ci >= 0) { ui.lens = ci; ui.lens_gen = dish.cell[ci].gen; shot(pre, "evolved"); }
+    ui.lens = -1;
+    /* phase 4: the card's buttons, the dex, the badges, the setup */
+    dish.badges |= 1u << BADGE_FIRST_SPLIT | 1u << BADGE_GEN10 | 1u << BADGE_COMEBACK | 1u << BADGE_SHELL | 1u << BADGE_ZOO;
+    dish.badges_new = 1u << BADGE_ZOO;
+    run(&dish, 0.2f, 0, false);
+    ui.toast_t = 0; tap_icon(ICON_CARD); shot(pre, "card2");
+    dish_ui_hotspot(HS_CARD_DEX, &hx, &hy); tap_at(hx, hy);
+    dish_ui_tile(PAGE_DEX, SP_MYXO, &hx, &hy); tap_at(hx, hy); shot(pre, "dex");
+    dish_ui_hotspot(HS_DONE, &hx, &hy); tap_at(hx, hy);
+    dish_ui_hotspot(HS_CARD_BADGES, &hx, &hy); tap_at(hx, hy);
+    dish_ui_tile(PAGE_BADGES, BADGE_SHELL, &hx, &hy); tap_at(hx, hy); shot(pre, "badges");
+    ui.page = PAGE_NONE; ui.toast_t = 0;
+    dish_ui_begin_setup(&ui);
+    shot(pre, "setup1"); dish_ui_hotspot(HS_DONE, &hx, &hy); tap_at(hx, hy);
+    shot(pre, "setup2"); dish_ui_hotspot(HS_DONE, &hx, &hy); tap_at(hx, hy);
+    shot(pre, "setup3"); dish_ui_hotspot(HS_DONE, &hx, &hy); tap_at(hx, hy);
+    shot(pre, "setup4");
     return 0;
 }
 
@@ -215,7 +237,7 @@ static int selftest_pet(void) {
 #ifdef DISH_SDL
 #include <SDL.h>
 /* the window: the mouse is the finger. Keys: N light, O an outbreak, F 10x time,
- * S save now, X a fresh dish, Q quit. The dish saves to dish.sav every 30 s. */
+ * D fifty DNA to try the unlocks, S save now, X a fresh dish (with the setup), Q quit. The dish saves to dish.sav every 30 s. */
 static void save_file(void) {
     static uint8_t buf[DISH_SAVE_MAX];
     size_t n = dish_save(&dish, buf, sizeof buf);
@@ -238,7 +260,7 @@ static int window(bool fresh) {
     dish_render_set_scene(scene);
     dish_events_set(on_event, NULL);
     dish_ui_init(&ui);
-    if (fresh || !load_file()) dish_init(&dish, SDL_GetTicks() | 1, SP_BACILLUS, "BLIP");
+    if (fresh || !load_file()) { dish_init(&dish, SDL_GetTicks() | 1, SP_BACILLUS, "BLIP"); dish_ui_begin_setup(&ui); }   /* a new dish: the setup over a demo dish */
     float speed = 1, save_t = 30;
     bool down = false;
     uint32_t last = SDL_GetTicks();
@@ -255,7 +277,8 @@ static int window(bool fresh) {
                 case SDLK_o: dish_outbreak(&dish, 6); break;
                 case SDLK_f: speed = speed > 1 ? 1 : 10; printf("time x%.0f\n", speed); break;
                 case SDLK_s: save_file(); printf("saved dish.sav\n"); break;
-                case SDLK_x: dish_init(&dish, SDL_GetTicks() | 1, SP_BACILLUS, "BLIP"); dish_ui_init(&ui); break;
+                case SDLK_x: dish_init(&dish, SDL_GetTicks() | 1, SP_BACILLUS, "BLIP"); dish_ui_init(&ui); dish_ui_begin_setup(&ui); break;
+                case SDLK_d: dish.dna += 50; printf("+50 DNA (%u)\n", dish.dna); break;
             }
         }
         uint32_t now = SDL_GetTicks();
@@ -326,11 +349,89 @@ static int selftest_evolve(void) {
     return fails ? 1 : 0;
 }
 
+static int selftest_prog(void) {
+    dish_events_set(on_event, NULL);
+    dish_init(&dish, 41, SP_BACILLUS, "BLIP");
+    dish_ui_init(&ui);
+    CHECK(dish.dna == 0 && dish.badges == 0, "a new dish starts with DNA or badges");
+    run(&dish, 60, 20, false);
+    CHECK(dish.badges >> BADGE_FIRST_SPLIT & 1, "the first split earned no badge");
+    CHECK(dish.dna >= BADGE_DNA, "a badge paid %u DNA", dish.dna);
+    CHECK(dish.dex & DEX_SPECIES(SP_BACILLUS) && dish.dex & DEX_SPECIES(SP_COCCUS), "the dex missed the germs in the dish");
+    /* buying */
+    dish.dna = 15; CHECK(!dish_prog_unlock(&dish, UNL_PH), "unlocked the pH dial on 15 DNA");
+    dish.dna = 25; CHECK(dish_prog_unlock(&dish, UNL_PH) && dish.dna == 5, "the pH dial did not cost 20");
+    CHECK(!dish_prog_unlock(&dish, UNL_PH), "bought the pH dial twice");
+    /* a locked dial in the lab: says its price, then unlocks, then works */
+    dish.dna = 0; float s0 = dish.salt, hx, hy;
+    tap_icon(ICON_LAB); dish_ui_hotspot(HS_SALT_PLUS, &hx, &hy); tap_at(hx, hy);
+    CHECK(dish.salt == s0 && !dish_has(&dish, UNL_SALT), "a locked salt dial moved");
+    CHECK(strstr(ui.toast, "30 DNA") != NULL, "a locked dial did not say its price (\"%s\")", ui.toast);
+    dish.dna = 30; tap_at(hx, hy);
+    CHECK(dish_has(&dish, UNL_SALT) && dish.salt == s0 && dish.dna == 0, "the tap with 30 DNA did not just unlock the salt dial");
+    tap_at(hx, hy); CHECK(dish.salt > s0, "an unlocked salt dial did not move");
+    ui.page = PAGE_NONE; dish.salt = s0;
+    /* the samples are locked too */
+    tap_icon(ICON_LAB); dish_ui_hotspot(HS_LAB_SAMPLES, &hx, &hy); tap_at(hx, hy);
+    dish_ui_hotspot(HS_SAMPLE_2, &hx, &hy); tap_at(hx, hy);
+    int myxo = 0; for (int s = 0; s < DISH_MAX_STRAINS; s++) myxo += dish.strain[s].used && dish.strain[s].species == SP_MYXO;
+    CHECK(!myxo, "a locked myxo sample joined");
+    ui.page = PAGE_NONE;
+    /* care pays when it was needed, not twice in a row */
+    run(&dish, 16, 0, false);
+    for (int i = 0; i < DISH_MAX_CELLS; i++) if (dish.cell[i].strain == DISH_PET) dish.cell[i].energy = 0.2f;
+    run(&dish, 0.1f, 0, false);
+    unsigned dna0 = dish.dna;
+    tap_icon(ICON_FEED);
+    CHECK(dish.dna == dna0 + 2, "feeding a hungry pet paid %u", dish.dna - dna0);
+    tap_icon(ICON_FEED);
+    CHECK(dish.dna == dna0 + 2, "a second feed paid again at once");
+    /* survivor: an outbreak comes and goes, the pet lives */
+    dish_outbreak(&dish, 4); run(&dish, 1, 0, false);
+    dish_antiviral(&dish); run(&dish, 2, 0, false);
+    CHECK(dish.badges >> BADGE_SURVIVOR & 1, "surviving an outbreak earned no badge");
+    /* comeback: extinct, then back from the vault */
+    for (int i = 0; i < DISH_MAX_CELLS; i++) if (dish.cell[i].strain == DISH_PET && dish.cell[i].state != CS_FREE) dish.cell[i].state = CS_DYING;
+    run(&dish, 33, 0, false);
+    CHECK(dish.badges >> BADGE_COMEBACK & 1, "coming back from the vault earned no badge");
+    /* the card's DEX and BADGES */
+    tap_icon(ICON_CARD); dish_ui_hotspot(HS_CARD_DEX, &hx, &hy); tap_at(hx, hy);
+    CHECK(ui.page == PAGE_DEX, "the card's DEX did not open the dex");
+    dish_ui_tile(PAGE_DEX, SP_PHAGE, &hx, &hy); tap_at(hx, hy);
+    CHECK(ui.sel == SP_PHAGE, "a dex tile did not select");
+    dish_ui_hotspot(HS_DONE, &hx, &hy); tap_at(hx, hy);
+    dish_ui_hotspot(HS_CARD_BADGES, &hx, &hy); tap_at(hx, hy);
+    CHECK(ui.page == PAGE_BADGES && dish.badges_new, "BADGES did not open, or nothing was new");
+    dish_ui_hotspot(HS_DONE, &hx, &hy); tap_at(hx, hy);
+    CHECK(ui.page == PAGE_CARD && !dish.badges_new, "leaving the badges did not clear the new ones");
+    ui.page = PAGE_NONE;
+    /* the save keeps it all */
+    static uint8_t buf[DISH_SAVE_MAX]; static dish_t back;
+    size_t n = dish_save(&dish, buf, sizeof buf);
+    CHECK(dish_load(&back, buf, n, 3) && back.dna == dish.dna && back.badges == dish.badges && back.unlocked == dish.unlocked && back.dex == dish.dex,
+          "the save lost the progression");
+    /* the first-run setup: pick the coccus, the second name, begin */
+    dish_ui_begin_setup(&ui);
+    dish_ui_hotspot(HS_DONE, &hx, &hy); tap_at(hx, hy);                 /* START */
+    dish_ui_hotspot(HS_STARTER_1, &hx, &hy); tap_at(hx, hy);
+    dish_ui_hotspot(HS_DONE, &hx, &hy); tap_at(hx, hy);                 /* NEXT */
+    dish_ui_hotspot(HS_NAME_NEXT, &hx, &hy); tap_at(hx, hy);
+    dish_ui_hotspot(HS_DONE, &hx, &hy); tap_at(hx, hy); tap_at(hx, hy); /* NEXT, BEGIN */
+    CHECK(!ui.setup && dish.strain[DISH_PET].species == SP_COCCUS && !strcmp(dish.strain[DISH_PET].name, "DOT"),
+          "the setup made a %s called %s", SPECIES_NAMES[dish.strain[DISH_PET].species], dish.strain[DISH_PET].name);
+    CHECK(dish.dna == 0, "the new dish kept %u DNA", dish.dna);
+    run(&dish, 0.1f, 0, false);                       /* (the census counts on the next tick) */
+    CHECK(dish.strain[DISH_PET].count > 0, "the new dish has no %s", dish.strain[DISH_PET].name);
+    printf("selftest-prog: %s\n", fails ? "FAILED" : "ok");
+    return fails ? 1 : 0;
+}
+
 int main(int argc, char **argv) {
     for (int a = 1; a < argc; a++) {
         if (!strcmp(argv[a], "--selftest-dish")) return selftest_dish();
         if (!strcmp(argv[a], "--selftest-pet")) return selftest_pet();
         if (!strcmp(argv[a], "--selftest-evolve")) return selftest_evolve();
+        if (!strcmp(argv[a], "--selftest-prog")) return selftest_prog();
         if (!strcmp(argv[a], "--bench")) {          /* render cost on a busy dish: the number to compare with the device */
             dish_render_set_scene(scene);
             dish_init(&dish, 3, SP_BACILLUS, "BLIP"); dish_ui_init(&ui);

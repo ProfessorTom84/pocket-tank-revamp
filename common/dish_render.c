@@ -414,9 +414,9 @@ static void draw_cell(const view_t *v, const dish_t *d, const cell_t *c) {
     v_cell(v, sg, n, r, &sh);
     if (c->state == CS_DYING) return;
     /* a salt-raised strain grows a thick shell: a second wall just outside the first */
-    if (c->g.salt_tol > 0.5f && !spore) {
-        shade_t shell = { 0, dr_hsv(shown_hue(&c->g), 0.12f, 1), 0, 0, 0.35f + (c->g.salt_tol - 0.5f) * 1.6f, 0 };
-        v_cell(v, sg, n, r * (1.12f + (c->g.salt_tol - 0.5f) * 0.4f), &shell);
+    if (c->g.salt_tol > 0.56f && !spore) {
+        shade_t shell = { 0, dr_hsv(shown_hue(&c->g), 0.12f, 1), 0, 0, 0.3f + (c->g.salt_tol - 0.56f) * 1.8f, 0 };
+        v_cell(v, sg, n, r * (1.12f + (c->g.salt_tol - 0.56f) * 0.45f), &shell);
     }
     /* a drug-resistant one wears armor: glinting plates that turn round its wall */
     if (c->g.drug_res > 0.35f && !spore) {
@@ -598,8 +598,9 @@ static const uint8_t FONT5X7[][7] = {
     { 0x00, 0x00, 0x00, 0x00, 0x0c, 0x04, 0x08 }, { 0x00, 0x00, 0x00, 0x1f, 0x00, 0x00, 0x00 }, { 0x00, 0x0c, 0x0c, 0x00, 0x0c, 0x0c, 0x00 },
     { 0x0c, 0x04, 0x08, 0x00, 0x00, 0x00, 0x00 }, { 0x01, 0x02, 0x02, 0x04, 0x08, 0x08, 0x10 }, { 0x00, 0x04, 0x04, 0x1f, 0x04, 0x04, 0x00 },
     { 0x19, 0x1a, 0x02, 0x04, 0x08, 0x0b, 0x13 }, { 0x00, 0x00, 0x08, 0x15, 0x02, 0x00, 0x00 },
+    { 0x02, 0x04, 0x08, 0x10, 0x08, 0x04, 0x02 }, { 0x08, 0x04, 0x02, 0x01, 0x02, 0x04, 0x08 },   /* < > (the name roller) */
 };
-static const char FONT_CHARS[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789?!.,-:'/+%~";
+static const char FONT_CHARS[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789?!.,-:'/+%~<>";
 static const uint8_t *glyph(char ch) {
     if (ch >= 'a' && ch <= 'z') ch -= 'a' - 'A';
     const char *p = ch ? strchr(FONT_CHARS, ch) : NULL;

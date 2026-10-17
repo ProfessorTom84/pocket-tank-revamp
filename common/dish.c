@@ -1,5 +1,6 @@
 /* dish.c — the living dish: see dish.h. */
 #include "dish.h"
+#include "dish_prog.h"
 #include <math.h>
 #include <string.h>
 
@@ -30,7 +31,8 @@ static const sp_info_t SP[SP_COUNT] = {
 
 static dish_event_fn g_ev; static void *g_ev_ud;
 void dish_events_set(dish_event_fn fn, void *ud) { g_ev = fn; g_ev_ud = ud; }
-static void emit(int ev, int strain) { if (g_ev) g_ev(ev, strain, g_ev_ud); }
+void dish_emit(int ev, int strain) { if (g_ev) g_ev(ev, strain, g_ev_ud); }
+#define emit dish_emit
 
 static uint32_t xs(dish_t *d) { uint32_t x = d->rng; x ^= x << 13; x ^= x >> 17; x ^= x << 5; return d->rng = x ? x : 1; }
 float dish_rand(dish_t *d, float lo, float hi) { return lo + (hi - lo) * (xs(d) >> 8) * (1.0f / 16777216.0f); }
@@ -132,7 +134,7 @@ genome_t dish_species_genome(species_t sp) {
     static const float HUE[SP_COUNT] = { 0.08f, 0.52f, 0.86f, 0.33f, 0.14f, 0.74f };
     static const float HEAT[SP_COUNT] = { 0.45f, 0.5f, 0.68f, 0.52f, 0.5f, 0.5f };
     static const float PH[SP_COUNT]   = { 0.5f, 0.55f, 0.42f, 0.62f, 0.5f, 0.5f };
-    static const float SALT[SP_COUNT] = { 0.65f, 0.3f, 0.3f, 0.45f, 0.35f, 1 };   /* coccus: salt-hardy, like a staph */
+    static const float SALT[SP_COUNT] = { 0.5f, 0.3f, 0.3f, 0.4f, 0.35f, 1 };     /* coccus: salt-hardier, like a staph */
     genome_t g = { 1, 1, HUE[sp], HEAT[sp], SALT[sp], 0.05f, 0.15f, 1, PH[sp] };
     return g;
 }
@@ -225,6 +227,7 @@ void dish_feed(dish_t *d, float x, float y, float amount) {
     if (!dish_inside(x, y, 6)) return;
     splat(d->nutr, x, y, amount * 0.9f, 26, 1.0f);
     part_add(d, PT_DROP, x, y, 0, 0, 0.35f, 0xFFD27A);
+    dish_prog_care(d, CARE_FEED);
     emit(DEV_FEED, -1);
 }
 void dish_stir(dish_t *d, float x, float y, float dx, float dy) {
@@ -249,12 +252,14 @@ void dish_dose(dish_t *d, float x, float y, float amount) {
     part_add(d, PT_DROP, x, y, 0, 0, 0.35f, 0x9CF0FF);
 }
 void dish_antiviral(dish_t *d) {
+    dish_prog_care(d, CARE_CURE);
     for (int i = 0; i < DISH_MAX_CELLS; i++) {
         cell_t *c = &d->cell[i];
         if (c->state == CS_LIVE && c->species == SP_PHAGE && !c->host) { c->state = CS_DYING; c->dying_t = 0; }
     }
 }
 void dish_wipe(dish_t *d, float x, float y, float r) {
+    if (dish_field(d->waste, x, y) > 0.2f) dish_prog_care(d, CARE_CLEAN);
     for (int j = 0; j < FIELD_N; j++)
         for (int i = 0; i < FIELD_N; i++) {
             float ex = (i + 0.5f) * FCW - x, ey = (j + 0.5f) * FCH - y;
@@ -683,6 +688,7 @@ void dish_tick(dish_t *d, float dt, dish_brain_fn brain) {
     if (d->uv_t > 0) d->uv_t -= dt;
     if (d->scare_t > 0) d->scare_t -= dt;
     parts_tick(d, dt);
+    dish_prog_tick(d, dt);
 
     /* the wild phages come in now and then (only when none are about) */
     int ps = strain_of(d, SP_PHAGE);
@@ -716,7 +722,7 @@ static const float GLO[GENES] = { 0.5f, 0.75f, 0, 0, 0, 0, 0, 0.6f, 0 }, GHI[GEN
 
 size_t dish_save(const dish_t *d, uint8_t *out, size_t cap) {
     wbuf_t w = { out, 0, cap, true };
-    uint32_t magic = SAVE_MAGIC; uint16_t ver = 2;   /* v2 (phase 3): pH, salt, ph_opt - nothing shipped v1, so it is refused */
+    uint32_t magic = SAVE_MAGIC; uint16_t ver = 3;   /* v2 (phase 3): pH, salt, ph_opt - nothing shipped v1, so it is refused; v3: progression at the tail */
     w_bytes(&w, &magic, 4); w_bytes(&w, &ver, 2);
     w_bytes(&w, &d->temp, 4); w_bytes(&w, &d->clock, 4); w_bytes(&w, &d->outbreak_t, 4);
     uint8_t light = d->light; w_bytes(&w, &light, 1);
@@ -743,6 +749,9 @@ size_t dish_save(const dish_t *d, uint8_t *out, size_t cap) {
         const float *g = &c->g.speed;
         for (int k = 0; k < GENES; k++) w_q8(&w, g[k], GLO[k], GHI[k]);
     }
+    /* v3 */
+    uint32_t prog[6] = { d->dna, d->badges, d->badges_new, d->dex, d->unlocked, d->births_paid };
+    w_bytes(&w, prog, sizeof prog);
     return w.ok ? w.n : 0;
 }
 
@@ -784,6 +793,10 @@ bool dish_load(dish_t *d, const uint8_t *in, size_t len, uint32_t seed) {
         for (int k = 0; k < GENES; k++) g[k] = r_q8(&r, GLO[k], GHI[k]);
         c->phase = dish_rand(&nd, 0, TAU); c->run_t = dish_rand(&nd, 0.2f, 1.5f);
         if (!nd.strain[c->strain].used) c->state = CS_FREE;
+    }
+    if (ver >= 3) {
+        uint32_t prog[6]; r_bytes(&r, prog, sizeof prog);
+        nd.dna = prog[0]; nd.badges = prog[1]; nd.badges_new = prog[2]; nd.dex = prog[3]; nd.unlocked = prog[4]; nd.births_paid = prog[5];
     }
     if (!r.ok || !nd.strain[DISH_PET].used) return false;
     *d = nd;

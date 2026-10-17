@@ -121,6 +121,10 @@ typedef struct {
     float scare_x, scare_y;
     int n_live;
     uint32_t rng;
+    /* the long game (dish_prog.c) */
+    uint32_t dna, badges, badges_new, dex, unlocked, births_paid;
+    float care_cd;
+    uint8_t outbreak_on, was_extinct;
 } dish_t;
 
 typedef strat_t (*dish_brain_fn)(const dish_t *d, int strain);
@@ -160,9 +164,10 @@ int   dish_cell_at(const dish_t *d, float x, float y, float slop);   /* the livi
 float dish_cell_radius(const cell_t *c);
 
 /* events (sounds are feedback, never behavior: one listener, may only enqueue) */
-enum { DEV_FEED, DEV_DIVIDE, DEV_POP, DEV_BURST, DEV_INFECT, DEV_EXTINCT, DEV_RESPAWN, DEV_OUTBREAK, DEV_STRAT, DEV_COUNT };
+enum { DEV_FEED, DEV_DIVIDE, DEV_POP, DEV_BURST, DEV_INFECT, DEV_EXTINCT, DEV_RESPAWN, DEV_OUTBREAK, DEV_STRAT, DEV_BADGE, DEV_COUNT };   /* DEV_BADGE: strain = the badge */
 typedef void (*dish_event_fn)(int ev, int strain, void *ud);
 void dish_events_set(dish_event_fn fn, void *ud);
+void dish_emit(int ev, int strain);
 
 /* the rule brain (dish_brain.c) — the LLM's place once the dish model is distilled */
 strat_t dish_brain_rules(const dish_t *d, int strain);
