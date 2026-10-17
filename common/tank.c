@@ -1394,7 +1394,7 @@ static void sh_let_go(tank_t *t, float wait) {
  * for one. */
 float tank_seahorse_jut(const tank_t *t) {
     if (t->sh_snap < 0) return 0;
-    return SH_JUT * sinf((float)M_PI * fminf(1, t->sh_snap / SH_SNAP_S));
+    return SH_JUT * sinf(3.14159265f * fminf(1, t->sh_snap / SH_SNAP_S));
 }
 static void sh_snack(tank_t *t, float dt) {
     if (t->sh_snack_cool > 0) t->sh_snack_cool -= dt;

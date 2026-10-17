@@ -2025,7 +2025,7 @@ static int sh_tail_path(decor_scratch_t *sc, int pose, float u, float t, float S
         if (i) s += sqrtf((x - lx) * (x - lx) + (y - ly) * (y - ly));
         sc->sh_pts[n][0] = x; sc->sh_pts[n][1] = y; sc->sh_pts[n][2] = s; sc->sh_behind[n] = 0; n++; lx = x; ly = y;
     }
-    float th_max = turns * 2 * (float)M_PI; int m = (int)(th_max / 0.17f);
+    float th_max = turns * 2 * 3.14159265f; int m = (int)(th_max / 0.17f);
     for (int i = 1; i <= m && n < SH_PTS_MAX; i++) {
         float th = th_max * i / m, f = th / th_max;
         float r = r0 + (r1 - r0) * powf(f, 0.9f) + breathe * f;
@@ -2039,7 +2039,7 @@ static int sh_tail_path(decor_scratch_t *sc, int pose, float u, float t, float S
 static bool sh_body(float ly, float *sx, float *w, float *tb) {
     if (ly < 13.2f || ly > 26.4f) return false;
     float tt = (26.0f - ly) / 12.8f; tt = tt < 0 ? 0 : tt > 1 ? 1 : tt;
-    float sp = sinf((float)M_PI * tt);
+    float sp = sinf(3.14159265f * tt);
     *sx = 7.0f + 1.0f * tt + 1.6f * sp; *w = 3.0f + 3.0f * powf(sp, 0.75f); *tb = tt;
     return true;
 }
@@ -2114,7 +2114,7 @@ static uint8_t sh_tone(float lx, float ly, float t, float flutter, const decor_s
     }
     float vx = lx - 5.2f, vy = ly - 20.3f, rr = lx < 11.5f && ly > 13.5f && ly < 27.5f ? sqrtf(vx * vx + vy * vy) : 0;   /* the dorsal fin: a fan of rays, fluttering (its corner only) */
     if (rr > 0.6f) {
-        float ang = atan2f(vy, vx) * (180.0f / (float)M_PI); if (ang < 0) ang += 360;
+        float ang = atan2f(vy, vx) * (180.0f / 3.14159265f); if (ang < 0) ang += 360;
         if (ang >= 118 && ang <= 242) {
             float a = (ang - 180) / 62.0f;
             float L = 5.6f * (1 - 0.45f * a * a) + 0.5f * sinf(t * 9.0f * flutter + a * 2.5f);
@@ -2210,7 +2210,7 @@ static float seahorse_pitch(const tank_t *t) {
     if (t->sh_mode == SH_PERCH && t->sh_akind != SH_ANCHOR_NONE) return 0;
     float speed = sqrtf(t->sh_vx * t->sh_vx + t->sh_vy * t->sh_vy);
     float f = fabsf(t->sh_vx) / 42.0f + speed / 120.0f; if (f > 1) f = 1;
-    return 30.0f * f * (float)M_PI / 180.0f;
+    return 30.0f * f * 3.14159265f / 180.0f;
 }
 /* its box this frame (the draw's loop and the dynamic rect): the sprite's
  * rectangle through its pitch about the anchor, plus the lean, the bob and a
@@ -2259,7 +2259,7 @@ static void draw_seahorse(ctx_t *c, const tank_t *t) {
     if (free_u > 0) {                                                    /* off a blade it bobs in the water and pitches with speed */
         ay += free_u * 1.6f * fast_sin(t->clock * 1.7f); ax += free_u * 0.8f * fast_sin(t->clock * 0.9f + 1.0f);
         float f = fabsf(t->sh_vx) / 42.0f + speed / 120.0f; if (f > 1) f = 1;
-        pitch = SH_PITCH_MAX * f * (float)M_PI / 180.0f;                /* forward = the way it faces */
+        pitch = SH_PITCH_MAX * f * 3.14159265f / 180.0f;                /* forward = the way it faces */
     }
     sh_spiral_t pa, pb; sh_spiral(&pa, SH_FREE, SX, SW); sh_spiral(&pb, pose, SX, SW);
     float coilx = sh_lerp(pa.cx, pb.cx, u), coily = sh_lerp(pa.cy, pb.cy, u);
