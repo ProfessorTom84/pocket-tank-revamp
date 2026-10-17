@@ -9,6 +9,7 @@
 #include "dish_ui.h"
 #include "dish_prog.h"
 #include "sounds.h"
+#include "dish_mut.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -161,10 +162,19 @@ static int snapshot(const char *pre) {
     float hx, hy; dish_ui_hotspot(HS_PH_MINUS, &hx, &hy); tap_at(hx, hy); tap_at(hx, hy);
     dish_ui_hotspot(HS_SALT_PLUS, &hx, &hy); tap_at(hx, hy); tap_at(hx, hy); tap_at(hx, hy);
     shot(pre, "lab3");
-    dish_ui_hotspot(HS_LAB_SAMPLES, &hx, &hy); tap_at(hx, hy); shot(pre, "samples");
     ui.page = PAGE_NONE;
-    for (int k = 0; k < 3; k++) { tap_icon(ICON_LAB); dish_ui_hotspot(HS_LAB_SAMPLES, &hx, &hy); tap_at(hx, hy); dish_ui_hotspot((hotspot_t)(HS_SAMPLE_0 + k), &hx, &hy); tap_at(hx, hy); }
+    {   /* visitors: a threat or two and the friends */
+        static const species_t V[] = { SP_MOLD, SP_CILIATE, SP_HALO, SP_SYMBIONT, SP_DONOR };
+        for (int k = 0; k < 5; k++) dish_visit(&dish, V[k]);
+    }
     run(&dish, 90, 10, false);
+    /* a build: what drafting does to a strain */
+    { static const int B[] = { M_SPIKES, M_SPIKES, M_CILIA, M_CHLORO, M_CHLORO, M_TOXIN, M_GLOW, M_FLAGELLA };
+      for (int k = 0; k < 8; k++) dish_mut_take(&dish, DISH_PET, B[k]); }
+    dish.drafts = 2; dish.offer[0] = dish.offer[1] = dish.offer[2] = 0xFF;
+    ui.toast_t = 0; run(&dish, 0.1f, 0, false); shot(pre, "mutate_chip");
+    dish_ui_hotspot(HS_MUTATE, &hx, &hy); tap_at(hx, hy); shot(pre, "draft");
+    ui.page = PAGE_NONE;
     /* show off evolution: a warm-raised, salt-shelled, drug-armored pet */
     for (int i = 0; i < DISH_MAX_CELLS; i++) {
         cell_t *c = &dish.cell[i];
@@ -413,7 +423,7 @@ static int selftest_prog(void) {
     run(&dish, 60, 20, false);
     CHECK(dish.badges >> BADGE_FIRST_SPLIT & 1, "the first split earned no badge");
     CHECK(dish.dna >= BADGE_DNA, "a badge paid %u DNA", dish.dna);
-    CHECK(dish.dex & DEX_SPECIES(SP_BACILLUS) && dish.dex & DEX_SPECIES(SP_COCCUS), "the dex missed the germs in the dish");
+    CHECK(dish.dex & DEX_SPECIES(SP_BACILLUS), "the dex missed the pet");
     /* buying */
     dish.dna = 15; CHECK(!dish_prog_unlock(&dish, UNL_PH), "unlocked the pH dial on 15 DNA");
     dish.dna = 25; CHECK(dish_prog_unlock(&dish, UNL_PH) && dish.dna == 5, "the pH dial did not cost 20");
@@ -427,12 +437,12 @@ static int selftest_prog(void) {
     CHECK(dish_has(&dish, UNL_SALT) && dish.salt == s0 && dish.dna == 0, "the tap with 30 DNA did not just unlock the salt dial");
     tap_at(hx, hy); CHECK(dish.salt > s0, "an unlocked salt dial did not move");
     ui.page = PAGE_NONE; dish.salt = s0;
-    /* the samples are locked too */
-    tap_icon(ICON_LAB); dish_ui_hotspot(HS_LAB_SAMPLES, &hx, &hy); tap_at(hx, hy);
-    dish_ui_hotspot(HS_SAMPLE_2, &hx, &hy); tap_at(hx, hy);
-    int myxo = 0; for (int s = 0; s < DISH_MAX_STRAINS; s++) myxo += dish.strain[s].used && dish.strain[s].species == SP_MYXO;
-    CHECK(!myxo, "a locked myxo sample joined");
-    ui.page = PAGE_NONE;
+    /* the starters cost DNA: a locked one can't be picked */
+    dish_ui_begin_setup(&ui);
+    dish_ui_hotspot(HS_DONE, &hx, &hy); tap_at(hx, hy);                 /* START */
+    dish_ui_hotspot(HS_STARTER_5, &hx, &hy); tap_at(hx, hy);            /* the myxo: 100 DNA, and there is none */
+    CHECK(ui.starter != 5, "a locked myxo starter was picked");
+    ui.setup = 0; ui.page = PAGE_NONE;
     /* care pays when it was needed, not twice in a row */
     run(&dish, 16, 0, false);
     for (int i = 0; i < DISH_MAX_CELLS; i++) if (dish.cell[i].strain == DISH_PET) dish.cell[i].energy = 0.2f;
@@ -467,6 +477,7 @@ static int selftest_prog(void) {
     CHECK(dish_load(&back, buf, n, 3) && back.dna == dish.dna && back.badges == dish.badges && back.unlocked == dish.unlocked && back.dex == dish.dex,
           "the save lost the progression");
     /* the first-run setup: pick the coccus, the second name, begin */
+    unsigned dna_before = dish.dna;
     dish_ui_begin_setup(&ui);
     run(&dish, 8, 0, false);                          /* the demo dish lives behind the setup... */
     CHECK(ui.toast_t <= 0, "a toast (\"%s\") showed over the setup", ui.toast);   /* ...without talking over it */
@@ -477,7 +488,7 @@ static int selftest_prog(void) {
     dish_ui_hotspot(HS_DONE, &hx, &hy); tap_at(hx, hy); tap_at(hx, hy); /* NEXT, BEGIN */
     CHECK(!ui.setup && dish.strain[DISH_PET].species == SP_COCCUS && !strcmp(dish.strain[DISH_PET].name, "DOT"),
           "the setup made a %s called %s", SPECIES_NAMES[dish.strain[DISH_PET].species], dish.strain[DISH_PET].name);
-    CHECK(dish.dna == 0, "the new dish kept %u DNA", dish.dna);
+    CHECK(dish.dna == dna_before, "the new dish lost the DNA (%u, was %u): a new germ keeps it", dish.dna, dna_before);
     run(&dish, 0.1f, 0, false);                       /* (the census counts on the next tick) */
     CHECK(dish.strain[DISH_PET].count > 0, "the new dish has no %s", dish.strain[DISH_PET].name);
     printf("selftest-prog: %s\n", fails ? "FAILED" : "ok");
@@ -518,6 +529,148 @@ static int selftest_render(void) {
     return fails ? 1 : 0;
 }
 
+static int ev_count[DEV_COUNT];
+static void count_events(int ev, int strain, void *ud) { (void)ud; if (ev >= 0 && ev < DEV_COUNT) ev_count[ev]++; dish_ui_event(&ui, &dish, ev, strain); }
+static void kill_pet(void) { for (int i = 0; i < DISH_MAX_CELLS; i++) if (dish.cell[i].strain == DISH_PET && dish.cell[i].state != CS_FREE) dish.cell[i].state = CS_DYING; }
+static int lit_diff(const uint16_t *a, const uint16_t *b) { int n = 0; for (int i = 0; i < DISH_W * DISH_H; i++) n += a[i] != b[i]; return n; }
+
+static int selftest_run(void) {
+    dish_events_set(count_events, NULL);
+    dish_init(&dish, 61, SP_BACILLUS, "BLIP"); dish_ui_init(&ui);
+    run(&dish, 1, 0, false);
+    CHECK(dish.strain[1].used == false && dish.n_live == dish.strain[DISH_PET].count, "a new run starts with more than the pet");
+    /* 1. a draft comes due every 8 generations */
+    dish.strain[DISH_PET].max_gen = DISH_DRAFT_GENS; run(&dish, 0.1f, 0, false);
+    CHECK(dish.drafts == 1 && dish.next_draft_gen == 2 * DISH_DRAFT_GENS, "the first draft's generation brought %d drafts (next at %u)", dish.drafts, dish.next_draft_gen);
+    dish.strain[DISH_PET].max_gen = 40; run(&dish, 0.1f, 0, false);
+    CHECK(dish.drafts == 3, "drafts did not stop at three waiting (%d)", dish.drafts);
+    /* 2. a deal is three different cards, and taking one applies it */
+    dish_draft_deal(&dish);
+    CHECK(dish.offer[0] != 0xFF && dish.offer[1] != 0xFF && dish.offer[2] != 0xFF && dish.offer[0] != dish.offer[1] && dish.offer[1] != dish.offer[2] && dish.offer[0] != dish.offer[2],
+          "a deal was not three different cards (%d %d %d)", dish.offer[0], dish.offer[1], dish.offer[2]);
+    int m = dish.offer[1], r0 = dish.strain[DISH_PET].mut[m];
+    CHECK(dish_draft_take(&dish, 1) && dish.strain[DISH_PET].mut[m] == r0 + 1 && dish.drafts == 2 && dish.offer[0] == 0xFF, "taking a card did not apply it");
+    float res0 = dish.strain[DISH_PET].vault.drug_res;
+    dish_mut_take(&dish, DISH_PET, M_EFFLUX);
+    int edited = 0, pets = 0;
+    for (int i = 0; i < DISH_MAX_CELLS; i++) if (dish.cell[i].strain == DISH_PET && dish.cell[i].state == CS_LIVE) { pets++; edited += dish.cell[i].g.drug_res > 0.2f; }
+    CHECK(dish.strain[DISH_PET].vault.drug_res > res0 + 0.2f && edited == pets, "PUMPS did not edit every cell's genome (%d of %d) and the vault", edited, pets);
+    /* 3. the look changes with the build */
+    {   genome_t g = dish_species_genome(SP_BACILLUS); uint8_t mu[DISH_MUT_N] = { 0 };
+        memset(fb, 0, sizeof fb); dr_cell_icon(fb, DISH_W, SP_BACILLUS, &g, mu, 100, 100, 4, 0, 0, true, 0);
+        memset(fb2, 0, sizeof fb2); mu[M_SPIKES] = 2; mu[M_CILIA] = 1; dr_cell_icon(fb2, DISH_W, SP_BACILLUS, &g, mu, 100, 100, 4, 0, 0, true, 0);
+        CHECK(lit_diff(fb, fb2) > 200, "spikes and cilia changed only %d pixels of the cell", lit_diff(fb, fb2)); }
+    /* 4. the deal answers what the dish is doing: a virus, then heat */
+    dish_outbreak(&dish, 6); run(&dish, 0.1f, 0, false);
+    int answered = 0;
+    for (int k = 0; k < 200; k++) {
+        dish.drafts = 1; dish.offer[0] = dish.offer[1] = dish.offer[2] = 0xFF; dish_draft_deal(&dish);
+        for (int c = 0; c < 3; c++) if (dish.offer[c] != 0xFF && MUTS[dish.offer[c]].answers >> P_VIRUS & 1) { answered++; break; }
+    }
+    CHECK(answered >= 198, "a virus in the dish, and only %d of 200 deals answered it", answered);
+    dish_antiviral(&dish); run(&dish, 1, 0, false);
+    dish.temp = 0.95f; run(&dish, 0.1f, 0, false);
+    answered = 0;
+    for (int k = 0; k < 200; k++) {
+        dish.drafts = 1; dish.offer[0] = dish.offer[1] = dish.offer[2] = 0xFF; dish_draft_deal(&dish);
+        for (int c = 0; c < 3; c++) if (dish.offer[c] != 0xFF && MUTS[dish.offer[c]].answers >> P_HEAT & 1) { answered++; break; }
+    }
+    CHECK(answered >= 198, "a hot dish, and only %d of 200 deals answered the heat", answered);
+    dish.temp = 0.5f;
+    /* 5. one comeback, then the run is over - and what was earned stays */
+    dish.dna = 55; dish.badges |= 1u << BADGE_ZOO; dish.dex |= DEX_SPECIES(SP_MOLD); dish.unlocked |= 1u << UNL_UV;
+    uint32_t badges = dish.badges, dex = dish.dex, unl = dish.unlocked;
+    int built = dish_mut_total(&dish, DISH_PET);
+    CHECK(dish.run_muts > 0, "(the run has taken mutations, so the vault's one comeback counts)");
+    kill_pet(); run(&dish, 31.5f, 0, false);
+    CHECK(dish.strain[DISH_PET].count > 0 && dish.vault_used && !dish.run_over, "the first extinction did not come back from the vault");
+    CHECK(dish_mut_total(&dish, DISH_PET) == built && built > 0, "the vault lost the build (%d of %d)", dish_mut_total(&dish, DISH_PET), built);
+    kill_pet(); run(&dish, 2, 0, false);
+    CHECK(dish.run_over && ev_count[DEV_RUN_OVER] == 1 && ui.page == PAGE_RUNOVER, "the second extinction did not end the run (page %d)", ui.page);
+    float hx, hy;
+    uint32_t dna_kept = dish.dna;                                           /* (badges earned during the run add to it) */
+    dish_ui_hotspot(HS_DONE, &hx, &hy); tap_at(hx, hy);                     /* NEW RUN */
+    CHECK(ui.setup == 1, "NEW RUN did not open the setup");
+    tap_at(hx, hy);                                                         /* START */
+    dish_ui_hotspot(HS_STARTER_1, &hx, &hy); tap_at(hx, hy);                /* the coccus */
+    dish_ui_hotspot(HS_DONE, &hx, &hy); tap_at(hx, hy); tap_at(hx, hy); tap_at(hx, hy);   /* NEXT, NEXT, BEGIN */
+    run(&dish, 0.1f, 0, false);
+    CHECK(dish.run == 2 && !dish.run_over && !dish.vault_used && dish.strain[DISH_PET].species == SP_COCCUS && dish_mut_total(&dish, DISH_PET) == 0,
+          "the new run is not fresh (run %d, over %d, vault %d, %d mutations)", dish.run, dish.run_over, dish.vault_used, dish_mut_total(&dish, DISH_PET));
+    CHECK(dish.dna == dna_kept && dna_kept >= 55 && (dish.badges & badges) == badges && (dish.dex & dex) == dex && dish.unlocked == unl, "the new run lost what was earned (DNA %u of %u)", dish.dna, dna_kept);
+    CHECK(ui.page == PAGE_NONE && !ui.setup, "the new run left a page up");
+    /* 6. a save from before runs (v4) loads: run 1, the dex's forms moved up */
+    {   static uint8_t buf[DISH_SAVE_MAX]; static dish_t back;
+        FILE *f = fopen("testdata/dish-v4.sav", "rb");
+        size_t n = f ? fread(buf, 1, sizeof buf, f) : 0; if (f) fclose(f);
+        CHECK(n > 0 && dish_load(&back, buf, n, 3), "the v4 save (testdata/dish-v4.sav) did not load");
+        CHECK(back.run == 1 && back.dna == 77 && !strcmp(back.strain[DISH_PET].name, "OLDIE"), "the v4 save loaded wrong (run %d, DNA %u)", back.run, back.dna);
+        CHECK((back.dex & DEX_FORM(FORM_SHELL)) && !(back.dex & (1u << 10)) && (back.dex & DEX_SPECIES(SP_COCCUS)), "the v4 dex was not moved (%08x)", back.dex);
+        CHECK(back.offer[0] == 0xFF && back.next_draft_gen > back.strain[DISH_PET].max_gen, "the v4 save's draft state is wrong (next at %u)", back.next_draft_gen);
+        size_t n5 = dish_save(&back, buf, sizeof buf); static dish_t again;
+        CHECK(dish_load(&again, buf, n5, 3) && again.dex == back.dex && again.run == 1, "a migrated save does not round-trip as v5"); }
+    printf("selftest-run: %s\n", fails ? "FAILED" : "ok");
+    return fails ? 1 : 0;
+}
+
+/* a lazy keeper: feeds the colony every 45 s and takes the first card of every draft */
+static void lazy_run(dish_t *d, float seconds) {
+    for (float t = 0; t < seconds && !d->run_over; t += 15) {
+        run(d, 15, 0, false);
+        const strain_t *pet = &d->strain[DISH_PET];
+        if ((int)t % 45 == 0 && pet->count) dish_feed(d, pet->cx, pet->cy, 1.0f);
+        while (d->drafts) { dish_draft_deal(d); dish_draft_take(d, 0); }
+    }
+}
+static int selftest_visitors(void) {
+    dish_events_set(count_events, NULL);
+    /* each visitor does its job */
+    #define FRESH(seed) do { dish_init(&dish, seed, SP_BACILLUS, "BLIP"); dish_ui_init(&ui); run(&dish, 20, 10, false); } while (0)
+    FRESH(71); int s = dish_visit(&dish, SP_MOLD); run(&dish, 40, 0, false);
+    float mx = 0; for (int c = 0; c < FIELD_N * FIELD_N; c++) if (dish.drug[c] > mx) mx = dish.drug[c];
+    CHECK(s > 0 && mx > 0.2f, "the mold leaked no antibiotic (max %.2f)", mx);
+    FRESH(72); dish_visit(&dish, SP_LACTO); run(&dish, 120, 10, false);
+    CHECK(dish.ph < 0.45f, "the acid maker left the pH at %.2f", dish.ph);
+    FRESH(73); dish_visit(&dish, SP_HALO); run(&dish, 120, 10, false);
+    CHECK(dish.salt > 0.26f, "the halophile left the salt at %.2f", dish.salt);
+    {   FRESH(74); float f0 = 0, f1 = 0;
+        static dish_t ctrl; ctrl = dish; dish_visit(&dish, SP_SYMBIONT);
+        run(&dish, 60, 0, false); for (int c = 0; c < FIELD_N * FIELD_N; c++) f1 += dish.nutr[c];
+        dish = ctrl; run(&dish, 60, 0, false); for (int c = 0; c < FIELD_N * FIELD_N; c++) f0 += dish.nutr[c];
+        CHECK(f1 > f0 + 1, "the symbiont added no food (%.1f vs %.1f without it)", f1, f0); }
+    {   FRESH(75); int cs = dish_visit(&dish, SP_CILIATE); dish_outbreak(&dish, 1);
+        int gi = -1, pi = -1;
+        for (int i = 0; i < DISH_MAX_CELLS; i++) { if (dish.cell[i].strain == cs && gi < 0) gi = i; if (dish.cell[i].species == SP_PHAGE && dish.cell[i].state == CS_LIVE) pi = i; }
+        CHECK(gi >= 0 && pi >= 0, "no guardian or no phage to test with");
+        if (gi >= 0 && pi >= 0) { dish.cell[pi].x = dish.cell[gi].x + 3; dish.cell[pi].y = dish.cell[gi].y; run(&dish, 0.2f, 0, false);
+            CHECK(dish.cell[pi].state != CS_LIVE, "the guardian did not eat a virus touching it"); } }
+    {   FRESH(76); int ds = dish_visit(&dish, SP_DONOR); int di = -1, pi = -1;
+        for (int i = 0; i < DISH_MAX_CELLS; i++) { if (dish.cell[i].strain == ds && di < 0) di = i; if (dish.cell[i].strain == DISH_PET && dish.cell[i].state == CS_LIVE) pi = i; }
+        int d0 = dish.drafts, g0 = ev_count[DEV_GIFT];
+        if (di >= 0 && pi >= 0) { dish.cell[di].x = dish.cell[pi].x + 4; dish.cell[di].y = dish.cell[pi].y; run(&dish, 0.2f, 0, false); }
+        CHECK(dish.drafts == d0 + 1 && ev_count[DEV_GIFT] == g0 + 1, "touching the donor gave no free card"); }
+    {   FRESH(77); unsigned dead0 = dish.strain[DISH_PET].deaths; dish_visit(&dish, SP_VIBRIO); run(&dish, 90, 10, false);
+        CHECK(dish.strain[DISH_PET].deaths > dead0, "the vibrio hunted nothing"); }
+    /* a visitor whose time is up leaves, and frees its slot */
+    {   FRESH(78); int vs = dish_visit(&dish, SP_HALO); int gone0 = ev_count[DEV_VISIT_GONE];
+        dish.strain[vs].stay_t = 0; run(&dish, 45, 10, false);
+        CHECK(!dish.strain[vs].used && ev_count[DEV_VISIT_GONE] == gone0 + 1, "a visitor past its time did not leave (%d cells)", dish.strain[vs].count); }
+    /* the director brings visitors, and every run lives to see its first draft */
+    int ended_early = 0, visits = 0, drafts = 0, overs = 0;
+    for (uint32_t seed = 1; seed <= 30; seed++) {
+        dish_init(&dish, seed * 977, (species_t)(seed % 3), "BLIP"); dish_ui_init(&ui);
+        int v0 = ev_count[DEV_VISIT] + ev_count[DEV_OUTBREAK], d0 = ev_count[DEV_DRAFT];
+        lazy_run(&dish, 20 * 60);
+        visits += ev_count[DEV_VISIT] + ev_count[DEV_OUTBREAK] - v0; drafts += ev_count[DEV_DRAFT] - d0; overs += dish.run_over;
+        if (dish.run_over && dish.run_muts == 0) ended_early++;
+    }
+    printf("30 lazy 20-minute runs: %d visitors, %d drafts, %d runs over, %d over before a first card\n", visits, drafts, overs, ended_early);
+    CHECK(visits >= 30 * 3, "too few visitors: %d in 30 runs of 20 minutes", visits);
+    CHECK(ended_early == 0, "%d runs ended before their first mutation", ended_early);
+    printf("selftest-visitors: %s\n", fails ? "FAILED" : "ok");
+    return fails ? 1 : 0;
+}
+
 int main(int argc, char **argv) {
     for (int a = 1; a < argc; a++) {
         if (!strcmp(argv[a], "--selftest-dish")) return selftest_dish();
@@ -525,6 +678,8 @@ int main(int argc, char **argv) {
         if (!strcmp(argv[a], "--selftest-evolve")) return selftest_evolve();
         if (!strcmp(argv[a], "--selftest-prog")) return selftest_prog();
         if (!strcmp(argv[a], "--selftest-render")) return selftest_render();
+        if (!strcmp(argv[a], "--selftest-run")) return selftest_run();
+        if (!strcmp(argv[a], "--selftest-visitors")) return selftest_visitors();
         if (!strcmp(argv[a], "--bench")) {          /* render cost on a busy dish: the number to compare with the device */
             dish_render_set_scene(scene); dish_render_set_background(bg);
             dish_init(&dish, 3, SP_BACILLUS, "BLIP"); dish_ui_init(&ui);

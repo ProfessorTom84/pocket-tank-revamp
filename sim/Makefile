@@ -75,7 +75,7 @@ check-nomodel:
 # `make dish` -> ./dishsim: headless always (selftests, --snapshot); a window too
 # when sdl2-config is found. ROUND=1 / WATCH=1 / SQUARE=1 pick the glass as above.
 # Native arch (no $(ARCH)): it needs no LVGL and links a native SDL2 if there is one.
-DISH_SRCS := dish_main.c ../common/dish.c ../common/dish_brain.c ../common/dish_render.c ../common/dish_ui.c ../common/dish_prog.c
+DISH_SRCS := dish_main.c ../common/dish.c ../common/dish_brain.c ../common/dish_render.c ../common/dish_ui.c ../common/dish_prog.c ../common/dish_mut.c
 DISH_OUT  := $(subst fishsim,dishsim,$(OUT))
 ifneq ($(shell command -v sdl2-config 2>/dev/null),)
 DISH_SDL  := -DDISH_SDL $(SDL_CFLAGS)
@@ -85,7 +85,7 @@ dish: $(DISH_OUT)
 $(DISH_OUT): $(DISH_SRCS) $(wildcard ../common/dish*.h)
 	$(CC) $(ROUNDF) -O2 -std=c11 -I../common -Wall -Wextra -Wno-unused-parameter $(DISH_SDL) -o $@ $(DISH_SRCS) $(DISH_LIBS) -lm
 dish-check: $(DISH_OUT)
-	./$(DISH_OUT) --selftest-dish && ./$(DISH_OUT) --selftest-pet && ./$(DISH_OUT) --selftest-evolve && ./$(DISH_OUT) --selftest-prog && ./$(DISH_OUT) --selftest-render
+	./$(DISH_OUT) --selftest-dish && ./$(DISH_OUT) --selftest-pet && ./$(DISH_OUT) --selftest-evolve && ./$(DISH_OUT) --selftest-prog && ./$(DISH_OUT) --selftest-render && ./$(DISH_OUT) --selftest-run && ./$(DISH_OUT) --selftest-visitors
 dish-check-all:
 	$(MAKE) dish-check
 	$(MAKE) ROUND=1 dish-check
@@ -95,7 +95,7 @@ dish-check-all:
 
 # ---- Pocket Dish in a browser (Emscripten): `make web` -> web-dist/, `make web-serve` opens it on localhost ----
 # One WebAssembly module per glass (the shape is compiled in, as on the boards), the page, and the sound bank.
-WEB_SRCS := web_main.c ../common/dish.c ../common/dish_brain.c ../common/dish_render.c ../common/dish_ui.c ../common/dish_prog.c ../common/sounds.c
+WEB_SRCS := web_main.c ../common/dish.c ../common/dish_brain.c ../common/dish_render.c ../common/dish_ui.c ../common/dish_prog.c ../common/dish_mut.c ../common/sounds.c
 WEB_FLAGS := -O2 -std=c11 -I../common -sMODULARIZE=1 -sEXPORT_NAME=createDish -sENVIRONMENT=web -sFILESYSTEM=0 \
              -sINITIAL_MEMORY=16MB -sEXPORTED_RUNTIME_METHODS=HEAPU8,HEAPU16,HEAP32 \
              -sEXPORTED_FUNCTIONS=_web_w,_web_h,_web_fb,_web_save_buf,_web_init,_web_frame,_web_touch,_web_save,_web_sound,_web_key,_web_fast,_web_reset

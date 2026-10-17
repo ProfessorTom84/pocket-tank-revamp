@@ -7,6 +7,7 @@
  * one to four segments (a bead, a rod, a pinching pair, a corkscrew), shaded
  * from one lookup table by d^2/r^2 so the hot loop has no sqrt. */
 #include "dish_render.h"
+#include "dish_mut.h"
 #include <math.h>
 #include <string.h>
 
@@ -357,8 +358,11 @@ static void draw_phage(const view_t *v, const cell_t *c, float clock) {
         }
 }
 
-static void draw_cell(const view_t *v, float clock, const cell_t *c) {
+static const uint8_t NO_MUTS[DISH_MUT_N];
+static void draw_muts(const view_t *v, const cell_t *c, const uint8_t *mu, float x, float y, float r, float a, float dx, float dy, float clock);
+static void draw_cell(const view_t *v, float clock, const cell_t *c, const uint8_t *mu) {
     if (c->species == SP_PHAGE) { draw_phage(v, c, clock); return; }
+    if (!mu) mu = NO_MUTS;
     float s = v->s, x = WX(v, c->x), y = WY(v, c->y);
     float r = dish_cell_radius(c) * s * (1 + 0.22f * fminf(1, c->infect)) * (1 + 0.03f * sinf(c->phase * 0.7f));
     float fade = 1;
@@ -410,17 +414,61 @@ static void draw_cell(const view_t *v, float clock, const cell_t *c) {
         for (int k = 0; k < 4; k++) sg[n++] = (seg_t){ pts[k][0], pts[k][1], pts[k + 1][0], pts[k + 1][1] };
         r *= 0.6f; front = step * 2;
         break; }
+    case SP_MOLD: {                                            /* a tuft of hyphae: three filaments from one point */
+        uint32_t h = c->id * 2654435761u;
+        float lens[3] = { 2.4f, 1.8f, 1.5f };
+        for (int k = 0; k < 3; k++) {
+            float a = c->ang + (k - 1) * 2.1f + ((h >> (k * 5)) & 31) / 31.0f * 0.6f, L = r * lens[k];
+            sg[n++] = (seg_t){ x, y, x + cosf(a) * L, y + sinf(a) * L };
+        }
+        r *= 0.42f; front = r;
+        break; }
+    case SP_VIBRIO: {                                          /* a comma: a short curved rod */
+        float L = r * 1.4f, mx = x + px * r * 0.7f, my = y + py * r * 0.7f;
+        sg[n++] = (seg_t){ x - dx * L, y - dy * L, mx, my };
+        sg[n++] = (seg_t){ mx, my, x + dx * L, y + dy * L };
+        front = L;
+        break; }
+    case SP_LACTO: {                                           /* rods in pairs, end to end */
+        float L = r * 0.9f, gap = r * 0.35f;
+        sg[n++] = (seg_t){ x - dx * (gap + L), y - dy * (gap + L), x - dx * gap, y - dy * gap };
+        sg[n++] = (seg_t){ x + dx * gap, y + dy * gap, x + dx * (gap + L), y + dy * (gap + L) };
+        front = gap + L;
+        break; }
+    case SP_HALO: {                                            /* square archaea: a box, not a bead */
+        float h = r * 0.95f, cxs[4] = { 1, -1, -1, 1 }, cys[4] = { 1, 1, -1, -1 };
+        for (int k = 0; k < 4; k++) {
+            int k2 = (k + 1) & 3;
+            sg[n++] = (seg_t){ x + (dx * cxs[k] + px * cys[k]) * h, y + (dy * cxs[k] + py * cys[k]) * h,
+                               x + (dx * cxs[k2] + px * cys[k2]) * h, y + (dy * cxs[k2] + py * cys[k2]) * h };
+        }
+        r *= 0.4f; front = h;
+        break; }
+    case SP_SYMBIONT: {                                        /* a pair of beads */
+        sg[n++] = (seg_t){ x + dx * r * 0.75f, y + dy * r * 0.75f, x + dx * r * 0.75f, y + dy * r * 0.75f };
+        sg[n++] = (seg_t){ x - dx * r * 0.75f, y - dy * r * 0.75f, x - dx * r * 0.75f, y - dy * r * 0.75f };
+        r *= 0.85f; front = r * 1.6f;
+        break; }
+    case SP_CILIATE: case SP_DONOR: {                          /* a big oval (the guardian), a plain rod (the donor) */
+        float L = r * (c->species == SP_CILIATE ? 0.55f : 1.2f);
+        sg[n++] = (seg_t){ x - dx * L, y - dy * L, x + dx * L, y + dy * L };
+        front = L;
+        break; }
     default: sg[n++] = (seg_t){ x, y, x, y };
     }
     /* the flagellum: a travelling wave off the back of the swimmers */
-    if (!spore && (c->species == SP_BACILLUS) && c->state != CS_DYING) {
-        float L = r * 1.35f, bx = x - dx * L, by = y - dy * L;
+    int tails = (c->species == SP_BACILLUS || c->species == SP_VIBRIO) + mu[M_FLAGELLA];
+    if (!spore && tails && c->state != CS_DYING) {
+        float bx = x - dx * front, by = y - dy * front;
         float len = r * 4.2f, amp = r * 0.55f;
         uint32_t fc = dr_hsv(shown_hue(&c->g), 0.3f, 1);
         int beads = r > 8 ? 22 : 11;                     /* (the lens wants a smooth whip; the dish, a few beads) */
-        for (int k = 1; k <= beads; k++) {
-            float t = k / (float)beads, along = len * t, w = sinf(t * 9 - c->phase * 5) * amp * t;
-            v_glow(v, bx - dx * along + px * w, by - dy * along + py * w, fmaxf(1.1f, r * 0.24f), fc, 0.7f * (1 - t * 0.7f) * fade);
+        for (int f = 0; f < tails; f++) {
+            float o = (f - (tails - 1) * 0.5f) * 0.55f, tx = dx * cosf(o) - dy * sinf(o), ty = dy * cosf(o) + dx * sinf(o);
+            for (int k = 1; k <= beads; k++) {
+                float t = k / (float)beads, along = len * t, w = sinf(t * 9 - c->phase * 5 + f) * amp * t;
+                v_glow(v, bx - tx * along - ty * w, by - ty * along + tx * w, fmaxf(1.1f, r * 0.24f), fc, 0.7f * (1 - t * 0.7f) * fade);
+            }
         }
     }
     v_cell(v, sg, n, r, &sh);
@@ -438,6 +486,15 @@ static void draw_cell(const view_t *v, float clock, const cell_t *c) {
             v_glow(v, x + cosf(a) * r * 1.25f, y + sinf(a) * r * 1.25f, fmaxf(0.9f, r * 0.22f), 0xFFE08A, 0.25f + c->g.drug_res * 0.5f);
         }
     }
+    draw_muts(v, c, mu, x, y, r, front + (front > r * 1.2f ? r : 0), dx, dy, clock);
+    if (c->species == SP_MOLD)                               /* the mold's spore heads, at the filaments' tips */
+        for (int k = 0; k < n; k++) v_glow(v, sg[k].bx, sg[k].by, fmaxf(1.2f, r * 1.4f), 0xE8F07A, 0.7f);
+    if (c->species == SP_CILIATE) {                          /* the guardian's mouth groove, and its ring of cilia */
+        v_line(v, x + dx * r * 0.2f, y + dy * r * 0.2f, x + dx * r * 0.9f + px * r * 0.3f, y + dy * r * 0.9f + py * r * 0.3f, fmaxf(1, r * 0.12f), 0xBFE8FF, 0.5f, 0);
+        uint8_t cm[DISH_MUT_N] = { 0 }; cm[M_CILIA] = 1;
+        draw_muts(v, c, cm, x, y, r, front + r, dx, dy, clock);
+    }
+    if (c->species == SP_DONOR) { uint8_t dm[DISH_MUT_N] = { 0 }; dm[M_GENETHIEF] = 1; draw_muts(v, c, dm, x, y, r, front + r, dx, dy, clock); }
     /* the insides: a nucleoid, granules, the lamp's glint */
     uint32_t hue = dr_hsv(shown_hue(&c->g) + 0.06f, 0.35f, 0.9f);
     float gr = r * 0.32f;
@@ -465,6 +522,58 @@ static void draw_cell(const view_t *v, float clock, const cell_t *c) {
         float fx = c->species == SP_COCCUS ? x : x + dx * front * 0.35f, fy = c->species == SP_COCCUS ? y : y + dy * front * 0.35f;
         draw_eyes(v, fx, fy, er, ax, c->phase * 0.31f + c->gen * 1.7f, r >= 9);
     }
+}
+
+/* what the strain evolved, drawn on each cell: a mutation is something you can see. `a` is how far the body
+ * reaches along its heading (r for a bead, more for a rod): features sit on the ellipse a x r round the centre. */
+static void draw_muts(const view_t *v, const cell_t *c, const uint8_t *mu, float x, float y, float r, float a, float dx, float dy, float clock) {
+    float px = -dy, py = dx, ph = c->phase;
+    uint32_t hue = dr_hsv(shown_hue(&c->g), 0.45f, 1), rim = dr_hsv(shown_hue(&c->g), 0.2f, 1);
+    float lw = fmaxf(0.8f, r * 0.12f);
+    #define OUT(t, k, X, Y) do { float ct = cosf(t), st_ = sinf(t); X = x + (dx * ct * a + px * st_ * r) * (k); Y = y + (dy * ct * a + py * st_ * r) * (k); } while (0)
+    float ox, oy, ix, iy;
+    if (mu[M_GLOW]) v_glow(v, x, y, a * 1.9f, hue, 0.07f * mu[M_GLOW]);   /* (faint: a colony's glows add up) */
+    if (mu[M_SLIME]) v_ring(v, x, y, a * 1.3f, fmaxf(1, r * 0.45f), 0x7FE8C8, 0.12f + 0.06f * mu[M_SLIME]);
+    if (mu[M_BIOFILM]) v_ring(v, x, y, a * 1.75f, lw, 0x9FD8FF, 0.12f * mu[M_BIOFILM]);
+    if (mu[M_QUORUM]) v_glow(v, x, y, a * 1.5f, 0x7FF4FF, 0.12f * mu[M_QUORUM] * (0.5f + 0.5f * sinf(clock * 3)));   /* the whole strain pulses as one */
+    if (mu[M_SPIKES]) {
+        int k = 5 + 2 * mu[M_SPIKES];
+        for (int m = 0; m < k; m++) { float t = m * TAU / k + 0.3f; OUT(t, 1.0f, ix, iy); OUT(t, 1.5f, ox, oy); v_line(v, ix, iy, ox, oy, lw * 1.3f, rim, 0.85f, 0); }
+    }
+    if (mu[M_CILIA]) {
+        int k = r < 4 ? 10 : 18;
+        for (int m = 0; m < k; m++) {
+            float t = m * TAU / k, w = sinf(ph * 6 + m) * 0.25f;
+            OUT(t, 1.0f, ix, iy); OUT(t + w * 0.3f, 1.32f, ox, oy); v_line(v, ix, iy, ox, oy, fmaxf(0.7f, lw * 0.6f), rim, 0.55f, 0);
+        }
+    }
+    if (mu[M_TWITCH]) for (int m = 0; m < 6; m++) { float t = m * 1.05f + 0.5f; OUT(t, 1.0f, ix, iy); OUT(t, 1.9f, ox, oy); v_line(v, ix, iy, ox, oy, fmaxf(0.6f, lw * 0.45f), rim, 0.35f, 0); }
+    if (mu[M_GENETHIEF]) for (int m = -1; m <= 1; m += 2) {
+        float t = m * 0.5f; OUT(t, 1.0f, ix, iy); OUT(t, 2.7f, ox, oy);
+        v_line(v, ix, iy, ox, oy, fmaxf(0.7f, lw * 0.5f), 0xFFE08A, 0.5f, 0); v_glow(v, ox, oy, fmaxf(1, r * 0.25f), 0xFFE08A, 0.8f);
+    }
+    if (mu[M_SIGNAL]) for (int m = -1; m <= 1; m += 2) { OUT(m * 0.35f, 1.0f, ix, iy); OUT(m * 0.45f, 1.6f, ox, oy); v_line(v, ix, iy, ox, oy, lw * 0.6f, rim, 0.6f, 0); v_glow(v, ox, oy, fmaxf(1, r * 0.2f), 0xFFFFFF, 0.7f); }
+    if (mu[M_PREDATOR]) {                                    /* a maw at the front, a red edge */
+        OUT(0.0f, 1.0f, ix, iy); OUT(0.5f, 1.35f, ox, oy); v_line(v, ix, iy, ox, oy, lw * 1.3f, 0xFF5A4E, 0.9f, 0);
+        OUT(-0.5f, 1.35f, ox, oy); v_line(v, ix, iy, ox, oy, lw * 1.3f, 0xFF5A4E, 0.9f, 0);
+        v_ring(v, x, y, a * 1.05f, lw, 0xFF5A4E, 0.25f * mu[M_PREDATOR]);
+    }
+    if (mu[M_TOXIN]) for (int m = 0; m <= mu[M_TOXIN]; m++) {
+        float t = clock * 1.4f + m * TAU / (mu[M_TOXIN] + 1); OUT(t, 1.55f, ox, oy); v_glow(v, ox, oy, fmaxf(1.2f, r * 0.3f), 0xC8F040, 0.8f);
+    }
+    if (mu[M_PHAGESHIELD]) { int k = 4 + 2 * mu[M_PHAGESHIELD]; for (int m = 0; m < k; m++) { OUT(m * TAU / k + clock * 0.3f, 1.35f, ox, oy); v_glow(v, ox, oy, fmaxf(0.9f, r * 0.16f), 0xC07CFF, 0.6f); } }
+    if (mu[M_GLIDE]) for (int m = 1; m <= 3; m++) v_glow(v, x - dx * (a + r * 0.9f * m), y - dy * (a + r * 0.9f * m), fmaxf(1, r * 0.5f), 0x7FE8C8, 0.12f * mu[M_GLIDE] / m);
+    /* inside */
+    for (int m = 0; m < 2 + 2 * mu[M_CHLORO] && mu[M_CHLORO]; m++) { float t = m * 2.39996f + ph * 0.05f; v_glow(v, x + (dx * cosf(t) * a + px * sinf(t) * r) * 0.5f, y + (dy * cosf(t) * a + py * sinf(t) * r) * 0.5f, fmaxf(1, r * 0.2f), 0x4CF070, 0.75f); }
+    for (int m = 0; m < mu[M_GLUTTON]; m++) { float t = m * 2.1f + 1; v_glow(v, x + (dx * cosf(t) * a + px * sinf(t) * r) * 0.4f, y + (dy * cosf(t) * a + py * sinf(t) * r) * 0.4f, fmaxf(1, r * 0.28f), 0xFFB040, 0.55f); }
+    for (int m = 0; m < 2 * mu[M_SCAVENGER]; m++) { float t = m * 1.7f + 0.4f; v_glow(v, x + (dx * cosf(t) * a + px * sinf(t) * r) * 0.55f, y + (dy * cosf(t) * a + py * sinf(t) * r) * 0.55f, fmaxf(0.9f, r * 0.15f), 0xB07A40, 0.7f); }
+    if (mu[M_FERMENT]) for (int m = 0; m < mu[M_FERMENT]; m++) { float t = fmodf(clock * 0.7f + m * 0.37f, 1.0f); v_ring(v, x + px * r * (0.3f * m - 0.3f), y - r * (1.1f + t * 1.4f), fmaxf(0.8f, r * 0.14f), 0.6f, 0xFFFFFF, 0.4f * (1 - t)); }
+    if (mu[M_FASTDIV]) v_line(v, x + px * r * 0.95f, y + py * r * 0.95f, x - px * r * 0.95f, y - py * r * 0.95f, lw, 0xFFFFFF, 0.18f * mu[M_FASTDIV], 0);
+    if (mu[M_ACIDARMOR]) v_line(v, x - dx * a * 0.7f + px * r * 0.45f, y - dy * a * 0.7f + py * r * 0.45f, x + dx * a * 0.7f + px * r * 0.45f, y + dy * a * 0.7f + py * r * 0.45f, lw, 0xFF9A40, 0.25f * mu[M_ACIDARMOR], 0);
+    if (mu[M_BASEARMOR]) v_line(v, x - dx * a * 0.7f - px * r * 0.45f, y - dy * a * 0.7f - py * r * 0.45f, x + dx * a * 0.7f - px * r * 0.45f, y + dy * a * 0.7f - py * r * 0.45f, lw, 0x6A8CFF, 0.25f * mu[M_BASEARMOR], 0);
+    if (mu[M_CRISPR]) for (int m = -1; m <= 1; m++) v_line(v, x + dx * a * 0.3f * m + px * r * 0.6f, y + dy * a * 0.3f * m + py * r * 0.6f, x + dx * a * 0.3f * m - px * r * 0.6f, y + dy * a * 0.3f * m - py * r * 0.6f, lw * 0.8f, 0xC07CFF, 0.5f, 0);
+    if (mu[M_SPOREMASTER]) v_glow(v, x, y, fmaxf(1, r * 0.35f), 0xFFFFFF, 0.35f * mu[M_SPOREMASTER]);
+    #undef OUT
 }
 
 static void draw_heart(const view_t *v, float x, float y, float s, uint32_t col, float k) {
@@ -504,7 +613,7 @@ static void draw_world(const view_t *v, const dish_t *d) {
             if (want != pass) continue;
             float r = dish_cell_radius(c) * 7 * v->s, x = WX(v, c->x), y = WY(v, c->y);   /* 7 radii: a bacillus's tail reaches ~5.5 behind it (a band culled it at 3) */
             if (x + r < v->x0 || x - r >= v->x1 || y + r < v->y0 || y - r >= v->y1) continue;
-            draw_cell(v, d->clock, c);
+            draw_cell(v, d->clock, c, d->strain[c->strain].mut);
         }
     prof(2);
     draw_parts(v, d);
@@ -594,7 +703,7 @@ void dr_disc(uint16_t *fb, int stride, float x, float y, float r, uint32_t rgb, 
 void dr_ring(uint16_t *fb, int stride, float x, float y, float r, float w, uint32_t rgb, int a) { view_t v = frame_view(fb, stride); v_ring(&v, x, y, r, w, rgb, a / 255.0f); }
 void dr_line(uint16_t *fb, int stride, float x0, float y0, float x1, float y1, float w, uint32_t rgb, int a) { view_t v = frame_view(fb, stride); v_line(&v, x0, y0, x1, y1, w, rgb, 0, a); }
 
-void dr_cell_icon(uint16_t *fb, int stride, species_t sp, const genome_t *g, float x, float y, float s, float ang, float clock, bool face, float clip_r) {
+void dr_cell_icon(uint16_t *fb, int stride, species_t sp, const genome_t *g, const uint8_t *mut, float x, float y, float s, float ang, float clock, bool face, float clip_r) {
     cell_t one, *c = &one;                              /* one cell, drawn through the same shader */
     memset(c, 0, sizeof *c);
     c->state = CS_LIVE; c->species = (uint8_t)sp; c->strain = face ? DISH_PET : 1; c->g = *g;
@@ -602,7 +711,7 @@ void dr_cell_icon(uint16_t *fb, int stride, species_t sp, const genome_t *g, flo
     view_t v = frame_view(fb, stride);
     v.s = s; v.scx = x; v.scy = y;
     if (clip_r > 0) { v.circ = true; v.ccx = x; v.ccy = y; v.cr2 = clip_r * clip_r; }
-    draw_cell(&v, clock, c);
+    draw_cell(&v, clock, c, mut);
 }
 
 /* ---- the 5x7 pixel font (the tank's, render.c), drawn with a soft glow ---- */

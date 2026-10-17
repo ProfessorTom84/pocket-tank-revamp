@@ -44,6 +44,6 @@ void dr_line(uint16_t *fb, int stride, float x0, float y0, float x1, float y1, f
 int  dr_text(uint16_t *fb, int stride, int x, int y, int scale, uint32_t rgb, const char *s);   /* returns the width */
 int  dr_text_w(const char *s, int scale);
 /* a cell drawn on its own (the dex, the card): species look, genome color, at (x, y) scale s */
-void dr_cell_icon(uint16_t *fb, int stride, species_t sp, const genome_t *g, float x, float y, float s, float ang, float clock, bool face, float clip_r);   /* clip_r > 0: clipped to that circle */
+void dr_cell_icon(uint16_t *fb, int stride, species_t sp, const genome_t *g, const uint8_t *mut, float x, float y, float s, float ang, float clock, bool face, float clip_r);   /* mut: a build to draw (NULL none); clip_r > 0: clipped to that circle */
 
 #endif

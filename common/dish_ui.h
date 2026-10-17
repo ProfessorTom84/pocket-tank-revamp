@@ -12,7 +12,7 @@
 #include "dish.h"
 
 typedef enum { ICON_FEED, ICON_LAB, ICON_MEDS, ICON_CLEAN, ICON_ZOOM, ICON_CARD, ICON_COUNT } icon_t;
-typedef enum { PAGE_NONE, PAGE_CARD, PAGE_LAB, PAGE_MEDS, PAGE_SAMPLES, PAGE_DEX, PAGE_BADGES } page_t;
+typedef enum { PAGE_NONE, PAGE_CARD, PAGE_LAB, PAGE_MEDS, PAGE_DRAFT, PAGE_DEX, PAGE_BADGES, PAGE_RUNOVER } page_t;
 typedef enum { TOOL_NONE, TOOL_DRUG, TOOL_WIPE, TOOL_ZOOM } tool_t;
 typedef enum { NEED_FOOD, NEED_COMFORT, NEED_SPACE, NEED_CLEAN, NEED_HEALTH, NEED_COUNT } need_t;
 extern const char *const NEED_NAMES[NEED_COUNT];
@@ -55,8 +55,9 @@ int  dish_ui_take_sound(dish_ui_t *u, int *pitch);                              
 /* layout, so a test or the director can tap things without a literal pixel */
 void dish_ui_icon_pos(icon_t i, float *x, float *y);
 typedef enum { HS_LAB_MINUS, HS_LAB_PLUS, HS_LAB_LIGHT, HS_DONE, HS_MEDS_DRUG, HS_MEDS_VIRUS, HS_TOOL_DONE,
-               HS_PH_MINUS, HS_PH_PLUS, HS_SALT_MINUS, HS_SALT_PLUS, HS_LAB_UV, HS_LAB_SAMPLES, HS_SAMPLE_0, HS_SAMPLE_1, HS_SAMPLE_2,
-               HS_CARD_DEX, HS_CARD_BADGES, HS_STARTER_0, HS_STARTER_1, HS_STARTER_2, HS_NAME_PREV, HS_NAME_NEXT, HS_NAME } hotspot_t;
+               HS_PH_MINUS, HS_PH_PLUS, HS_SALT_MINUS, HS_SALT_PLUS, HS_LAB_UV,
+               HS_CARD_DEX, HS_CARD_BADGES, HS_STARTER_0, HS_STARTER_1, HS_STARTER_2, HS_STARTER_3, HS_STARTER_4, HS_STARTER_5,
+               HS_NAME_PREV, HS_NAME_NEXT, HS_NAME, HS_MUTATE, HS_DRAFT_0, HS_DRAFT_1, HS_DRAFT_2 } hotspot_t;   /* (NEW RUN is HS_DONE) */
 void dish_ui_tile(page_t page, int i, float *x, float *y);   /* the centre of the dex's / badges' i-th tile */
 void dish_ui_hotspot(hotspot_t h, float *x, float *y);   /* the centre of a page's button */
 #define DISH_ICON_R 19

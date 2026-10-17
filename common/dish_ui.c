@@ -3,6 +3,7 @@
 #include "dish_render.h"
 #include "dish_prog.h"
 #include "sounds.h"
+#include "dish_mut.h"
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
@@ -34,40 +35,38 @@ static float top_for(float w, float m) {
 #define PY ((int)(DISH_CY - PH / 2))
 typedef struct { int x, y, w, h; } rect_t;
 static bool in_rect(rect_t r, float x, float y) { return x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h; }
-/* the lab: three dials (HEAT, PH, SALT), then LIGHT / UV / SAMPLES */
+/* the lab: three dials (HEAT, PH, SALT), then LIGHT / UV */
 static rect_t dial_minus(int row) { return (rect_t){ PX + 76, PY + 46 + row * 42, 36, 34 }; }
 static rect_t dial_plus(int row)  { return (rect_t){ PX + PW - 52, PY + 46 + row * 42, 36, 34 }; }
-static rect_t lab_btn(int k)      { int w = (PW - 52) / 3; return (rect_t){ PX + 16 + k * (w + 10), PY + 176, w, 34 }; }
+static rect_t lab_btn(int k)      { int w = (PW - 42) / 2; return (rect_t){ PX + 16 + k * (w + 10), PY + 176, w, 34 }; }
 static rect_t lab_minus(void) { return dial_minus(0); }
 static rect_t lab_plus(void)  { return dial_plus(0); }
 static rect_t lab_light(void) { return lab_btn(0); }
-/* the sample rack */
-static const species_t SAMPLES[3] = { SP_SPIRILLUM, SP_CYANO, SP_MYXO };
-static const char *const SAMPLE_SAYS[3] = { "A SPINNING CORKSCREW. LOVES HEAT.", "MAKES ITS OWN FOOD FROM LIGHT.", "A HUNTER: IT EATS OTHER GERMS!" };
-static rect_t sample_row(int k) { return (rect_t){ PX + 16, PY + 48 + k * 56, PW - 32, 50 }; }
 static rect_t page_done(void) { return (rect_t){ (int)DISH_CX - 60, PY + PH - 54, 120, 40 }; }
 /* medicine: the two cures */
 static rect_t meds_drug(void)  { return (rect_t){ PX + 20, PY + 58, PW - 40, 66 }; }
 static rect_t meds_virus(void) { return (rect_t){ PX + 20, PY + 134, PW - 40, 66 }; }
-/* the card's two buttons, the dex's and the badges' grids */
+/* the card's two buttons; the dex's and the badges' grids (6 x 3) */
 static rect_t card_btn(int k) { int w = (PW - 52) / 2; return (rect_t){ PX + 18 + k * (w + 16), PY + PH - 42, w, 30 }; }
-static rect_t tile(page_t p, int i) {
-    if (p == PAGE_DEX) { int c = i % 5, r = i / 5; return (rect_t){ (int)DISH_CX - 156 + c * 64, PY + 50 + r * 64, 56, 56 }; }
-    int c = i % 6, r = i / 6; return (rect_t){ (int)DISH_CX - 153 + c * 52, PY + 50 + r * 52, 46, 46 };
-}
+static rect_t tile(page_t p, int i) { (void)p; int c = i % 6, r = i / 6; return (rect_t){ (int)DISH_CX - 140 + c * 48, PY + 44 + r * 46, 40, 40 }; }
 void dish_ui_tile(page_t page, int i, float *x, float *y) { rect_t r = tile(page, i); *x = r.x + r.w * 0.5f; *y = r.y + r.h * 0.5f; }
-/* the setup: three starters, the name roller */
-static const species_t STARTERS[3] = { SP_BACILLUS, SP_COCCUS, SP_SPIRILLUM };
-static const char *const STARTER_SAYS[3] = { "ZOOMS AROUND", "STICKS TOGETHER", "LOVES IT WARM" };
+/* the setup: six starters (three to unlock with DNA), the name roller */
+#define N_STARTERS 6
+static const species_t STARTERS[N_STARTERS] = { SP_BACILLUS, SP_COCCUS, SP_SPIRILLUM, SP_CYANO, SP_VIBRIO, SP_MYXO };
+static const char *const STARTER_SAYS[N_STARTERS] = { "A FAST SWIMMER WITH A WHIPPY TAIL", "ROUND BEADS THAT STICK TOGETHER", "A CORKSCREW THAT LOVES IT WARM",
+                                                      "MAKES ITS OWN FOOD FROM LIGHT", "A TINY HUNTER: EATS OTHER GERMS", "HUNTS IN PACKS, HIDES IN SPORES" };
 static const char *const NAMES[] = { "BLIP", "DOT", "ZIGGY", "MOSS", "PIP", "GLOOP", "NIX", "TOFU", "BEAN", "ZAP", "FIZZ", "WOBBLE",
                                      "SPECK", "NOODLE", "JELLY", "ORBIT", "PICO", "BUBBA", "SQUIGGLE", "MOCHI", "PEBBLE", "SPROUT", "GIZMO", "TWIRL" };
 #define N_NAMES ((int)(sizeof NAMES / sizeof NAMES[0]))
-static rect_t starter_tile(int k) { int w = (PW - 48) / 3; return (rect_t){ PX + 16 + k * (w + 8), PY + 52, w, 128 }; }
+static rect_t starter_tile(int k) { int w = (PW - 48) / 3; return (rect_t){ PX + 16 + (k % 3) * (w + 8), PY + 42 + (k / 3) * 74, w, 68 }; }
 static rect_t name_prev(void) { return (rect_t){ PX + 20, PY + 92, 48, 48 }; }
 static rect_t name_next(void) { return (rect_t){ PX + PW - 68, PY + 92, 48, 48 }; }
 static rect_t name_box(void)  { return (rect_t){ PX + 76, PY + 88, PW - 152, 56 }; }
-/* a tool in hand: the DONE chip at the top */
+/* a tool in hand: the DONE chip at the top; a draft waiting: the MUTATE chip, in the same place */
 static rect_t tool_chip(void) { return (rect_t){ (int)DISH_CX - 70, (int)top_for(140, 6) + 34, 140, 32 }; }
+static rect_t mutate_chip(void) { return (rect_t){ (int)DISH_CX - 62, (int)top_for(124, 6) + 36, 124, 28 }; }
+/* the draft: three cards across */
+static rect_t draft_card(int k) { int w = (PW - 40) / 3; return (rect_t){ PX + 12 + k * (w + 8), PY + 44, w, 168 }; }
 void dish_ui_hotspot(hotspot_t h, float *x, float *y) {
     rect_t r;
     switch (h) {
@@ -76,12 +75,14 @@ void dish_ui_hotspot(hotspot_t h, float *x, float *y) {
     case HS_MEDS_DRUG: r = meds_drug(); break;   case HS_MEDS_VIRUS: r = meds_virus(); break;
     case HS_PH_MINUS: r = dial_minus(1); break;   case HS_PH_PLUS: r = dial_plus(1); break;
     case HS_SALT_MINUS: r = dial_minus(2); break; case HS_SALT_PLUS: r = dial_plus(2); break;
-    case HS_LAB_UV: r = lab_btn(1); break;        case HS_LAB_SAMPLES: r = lab_btn(2); break;
-    case HS_SAMPLE_0: case HS_SAMPLE_1: case HS_SAMPLE_2: r = sample_row(h - HS_SAMPLE_0); break;
+    case HS_LAB_UV: r = lab_btn(1); break;
     case HS_CARD_DEX: r = card_btn(0); break;     case HS_CARD_BADGES: r = card_btn(1); break;
-    case HS_STARTER_0: case HS_STARTER_1: case HS_STARTER_2: r = starter_tile(h - HS_STARTER_0); break;
+    case HS_STARTER_0: case HS_STARTER_1: case HS_STARTER_2: case HS_STARTER_3: case HS_STARTER_4: case HS_STARTER_5:
+        r = starter_tile(h - HS_STARTER_0); break;
     case HS_NAME_PREV: r = name_prev(); break;    case HS_NAME_NEXT: r = name_next(); break;
     case HS_NAME: r = name_box(); break;
+    case HS_MUTATE: r = mutate_chip(); break;
+    case HS_DRAFT_0: case HS_DRAFT_1: case HS_DRAFT_2: r = draft_card(h - HS_DRAFT_0); break;
     default: r = tool_chip(); break;
     }
     *x = r.x + r.w * 0.5f; *y = r.y + r.h * 0.5f;
@@ -134,10 +135,23 @@ void dish_ui_event(dish_ui_t *u, const dish_t *d, int ev, int strain) {
     case DEV_RESPAWN:  sfx(u, SND_ARRIVAL, 256, 0); break;
     case DEV_OUTBREAK: sfx(u, SND_SPOOK, 200, 0); break;
     case DEV_BADGE:    sfx(u, SND_MILESTONE, 256, 0); break;
+    case DEV_VISIT:    sfx(u, SPECIES_FRIENDLY[strain] ? SND_ARRIVAL : SND_SPOOK, SPECIES_FRIENDLY[strain] ? 300 : 220, 0); break;
+    case DEV_GIFT:     sfx(u, SND_MILESTONE, 330, 0); break;
+    case DEV_DRAFT:    sfx(u, SND_STAGE_UP, 256, 0); break;
+    case DEV_RUN_OVER: sfx(u, SND_SLEEP, 200, 0); break;
     }
     switch (ev) {
     case DEV_EXTINCT: u->extinct_show = 1; u->lens = -1; u->page = PAGE_NONE; break;
-    case DEV_RESPAWN: u->extinct_show = 0; u->back_show = 3.5f; snprintf(b, sizeof b, "%s IS BACK!", pet->name); dish_ui_toast(u, b, 3.5f); break;
+    case DEV_RESPAWN: u->extinct_show = 0; u->back_show = 3.5f; snprintf(b, sizeof b, d->vault_used ? "LAST CHANCE: %s IS BACK" : "%s IS BACK!", pet->name); dish_ui_toast(u, b, 4); break;
+    case DEV_RUN_OVER: u->lens = -1; u->tool = TOOL_NONE; u->page = PAGE_RUNOVER; break;
+    case DEV_VISIT:
+        snprintf(b, sizeof b, SPECIES_FRIENDLY[strain] ? "A FRIEND: %s ARRIVED" : "DANGER: %s ARRIVED", SPECIES_NAMES[strain]);
+        dish_ui_toast(u, b, 4); break;
+    case DEV_VISIT_GONE:
+        if (u->toast_t <= 0) { snprintf(b, sizeof b, "THE %s LEFT", SPECIES_NAMES[strain]); dish_ui_toast(u, b, 3); }
+        break;
+    case DEV_GIFT: dish_ui_toast(u, "GENE GIFT: A FREE MUTATION!", 4); break;
+    case DEV_DRAFT: dish_ui_toast(u, "READY TO MUTATE!", 3); break;
     case DEV_OUTBREAK: dish_ui_toast(u, "VIRUSES ARE COMING!", 4); break;
     case DEV_BADGE: snprintf(b, sizeof b, "BADGE: %s  +%d DNA", BADGE_NAMES[strain], BADGE_DNA); dish_ui_toast(u, b, 4); break;
     case DEV_INFECT:
@@ -175,6 +189,7 @@ static int icon_hit(float x, float y);
 void dish_ui_tick(dish_ui_t *u, dish_t *d, float dt) {
     u->clock += dt;
     for (int k = 0; k < 32; k++) if (u->snd_cd[k] > 0) u->snd_cd[k] -= dt;
+    if (d->run_over && !u->setup) { u->page = PAGE_RUNOVER; u->lens = -1; u->tool = TOOL_NONE; }
     if ((int)u->page != u->prev_page) {              /* a page opening, flipping or closing */
         sfx(u, u->page == PAGE_NONE ? SND_CARD_CLOSE : SND_CARD_OPEN, 256, 0);
         u->prev_page = u->page;
@@ -274,7 +289,8 @@ static void setup_tap(dish_ui_t *u, dish_t *d, float x, float y) {
     switch (u->setup) {
     case 1: if (next) u->setup = 2; break;
     case 2:
-        for (int k = 0; k < 3; k++) if (in_rect(starter_tile(k), x, y)) { u->starter = k; sfx(u, SND_TAP, 256 + k * 40, 0); }
+        for (int k = 0; k < N_STARTERS; k++)
+            if (in_rect(starter_tile(k), x, y) && gate(u, d, dish_unl_for_species(STARTERS[k]))) { u->starter = k; sfx(u, SND_TAP, 256 + k * 30, 0); }
         if (next) u->setup = 3;
         break;
     case 3:
@@ -286,7 +302,8 @@ static void setup_tap(dish_ui_t *u, dish_t *d, float x, float y) {
     case 4:
         if (next) {
             char b[40];
-            dish_init(d, (uint32_t)(u->clock * 1000) * 2654435761u | 1, STARTERS[u->starter], NAMES[u->name_i]);
+            dish_new_run(d, (uint32_t)(u->clock * 1000) * 2654435761u | 1, STARTERS[u->starter], NAMES[u->name_i]);   /* (DNA, badges, dex, unlocks stay) */
+            u->page = PAGE_NONE;
             u->setup = 0;
             for (int i = 0; i < NEED_COUNT; i++) u->needs[i] = 0.8f;
             snprintf(b, sizeof b, "SAY HI TO %s!", NAMES[u->name_i]);
@@ -318,7 +335,6 @@ static void page_tap(dish_ui_t *u, dish_t *d, float x, float y) {
         else if (in_rect(dial_plus(2), x, y)) { if (gate(u, d, UNL_SALT)) d->salt = clampf(d->salt + 0.05f, 0, 1); }
         else if (in_rect(lab_light(), x, y)) { d->light = !d->light; sfx(u, d->light ? SND_LIGHT_ON : SND_LIGHT_OFF, 256, 0); }
         else if (in_rect(lab_btn(1), x, y)) { if (gate(u, d, UNL_UV)) { dish_uv(d, 10); u->page = PAGE_NONE; dish_ui_toast(u, "UV ON: WATCH THEM CHANGE!", 3); sfx(u, SND_LIGHT_ON, 150, 0); } }
-        else if (in_rect(lab_btn(2), x, y)) u->page = PAGE_SAMPLES;
         else if (in_rect(page_done(), x, y)) u->page = PAGE_NONE;
         break;
     case PAGE_MEDS:
@@ -326,18 +342,22 @@ static void page_tap(dish_ui_t *u, dish_t *d, float x, float y) {
         else if (in_rect(meds_virus(), x, y)) { u->page = PAGE_NONE; dish_antiviral(d); sfx(u, SND_CONFIRM, 300, 0); dish_ui_toast(u, "THE VIRUSES ARE GONE", 3); }
         else if (in_rect(page_done(), x, y)) u->page = PAGE_NONE;
         break;
-    case PAGE_SAMPLES:
+    case PAGE_DRAFT:
         for (int k = 0; k < 3; k++)
-            if (in_rect(sample_row(k), x, y)) {
-                if (!gate(u, d, dish_unl_for_species(SAMPLES[k]))) return;
-                int s = dish_add_sample(d, SAMPLES[k]);
-                char b[40];
-                if (s >= 0) { snprintf(b, sizeof b, "%s JOINED THE DISH", SPECIES_NAMES[SAMPLES[k]]); u->page = PAGE_NONE; sfx(u, SND_ARRIVAL, 320, 0); }
-                else snprintf(b, sizeof b, "NO ROOM FOR %s", SPECIES_NAMES[SAMPLES[k]]);
-                dish_ui_toast(u, b, 3);
+            if (in_rect(draft_card(k), x, y) && d->offer[k] != 0xFF) {
+                int m = d->offer[k];
+                if (!dish_draft_take(d, k)) return;
+                char b[40], f[32]; dish_form_name(d, DISH_PET, f, sizeof f);
+                snprintf(b, sizeof b, "%s: %s", MUTS[m].name, f);
+                dish_ui_toast(u, b, 4);
+                sfx(u, MUTS[m].rarity == MR_EPIC ? SND_MILESTONE : SND_STAGE_UP, 256, 0);
+                if (d->drafts) dish_draft_deal(d); else u->page = PAGE_NONE;   /* another waiting: its cards, straight away */
                 return;
             }
-        if (in_rect(page_done(), x, y)) u->page = PAGE_LAB;
+        if (in_rect(page_done(), x, y)) u->page = PAGE_NONE;             /* LATER: the cards stay dealt */
+        break;
+    case PAGE_RUNOVER:
+        if (in_rect(page_done(), x, y)) dish_ui_begin_setup(u);         /* NEW RUN: pick a starter */
         break;
     default: u->page = PAGE_NONE;
     }
@@ -345,6 +365,7 @@ static void page_tap(dish_ui_t *u, dish_t *d, float x, float y) {
 static void tap(dish_ui_t *u, dish_t *d, float x, float y) {
     if (u->setup) { setup_tap(u, d, x, y); return; }
     if (u->page != PAGE_NONE) { page_tap(u, d, x, y); return; }
+    if (d->drafts && u->tool == TOOL_NONE && in_rect(mutate_chip(), x, y)) { dish_draft_deal(d); u->page = PAGE_DRAFT; return; }
     int ic = icon_hit(x, y);
     if (ic >= 0) { icon_press(u, d, ic); return; }
     if (u->tool != TOOL_NONE && in_rect(tool_chip(), x, y)) { u->tool = TOOL_NONE; return; }
@@ -499,8 +520,11 @@ static void lock_over(uint16_t *fb, int st, const dish_t *d, rect_t r, int unl) 
     dr_round_rect(fb, st, r.x, r.y, r.w, r.h, 10, 0x0A1224, 248);
     draw_lock(fb, st, r.x + r.w * 0.5f - 22, r.y + r.h * 0.5f, UNL_COST[unl], d->dna >= UNL_COST[unl]);
 }
-static const char *const SPECIES_SAYS[SP_COUNT] = { "ROUND BEADS THAT STICK IN BUNCHES.", "A ROD WITH A WHIPPY TAIL. FAST!",
-    "A CORKSCREW THAT SPINS TO SWIM.", "GREEN CHAINS THAT EAT LIGHT.", "A HUNTER THAT EATS OTHER GERMS.", "A VIRUS: IT BURSTS GERMS FROM INSIDE." };
+static const char *const SPECIES_SAYS[SP_COUNT] = {
+    "ROUND BEADS THAT STICK IN BUNCHES.", "A ROD WITH A WHIPPY TAIL. FAST!", "A CORKSCREW THAT SPINS TO SWIM.",
+    "GREEN CHAINS THAT EAT LIGHT.", "A HUNTER THAT EATS OTHER GERMS.", "A VIRUS: IT BURSTS GERMS FROM INSIDE.",
+    "A MOLD: IT LEAKS ANTIBIOTIC.", "A TINY, FAST HUNTER.", "IT MAKES THE DISH SOUR.", "IT MAKES THE DISH SALTY.",
+    "A FRIEND: IT LEAVES FOOD BEHIND.", "A GUARDIAN: IT EATS VIRUSES AND HUNTERS.", "A FRIEND: ITS GENES ARE A GIFT." };
 static void badge_glyph(uint16_t *fb, int st, int b, float x, float y, float s, bool got) {
     uint32_t base = got ? dr_hsv(b / 12.0f, 0.6f, 0.95f) : 0x2A3448, ink = got ? 0xFFFFFF : 0x4A5870;
     if (got) dr_glow(fb, st, x, y, s * 1.5f, base, 90);
@@ -521,6 +545,12 @@ static void badge_glyph(uint16_t *fb, int st, int b, float x, float y, float s, 
     case BADGE_FIRE: dr_disc(fb, st, x, y, s * 0.45f, got ? 0xFF4A20 : ink, 255); dr_glow(fb, st, x, y - s * 0.2f, s * 0.35f, 0xFFE070, got ? 255 : 0); break;
     case BADGE_ICE: dr_disc(fb, st, x, y, s * 0.45f, got ? 0x5AC8FF : ink, 255); dr_glow(fb, st, x - s * 0.15f, y - s * 0.15f, s * 0.3f, 0xFFFFFF, got ? 255 : 0); break;
     case BADGE_SPORES: for (int k = 0; k < 3; k++) dr_disc(fb, st, x + (k - 1) * s * 0.36f, y + (k == 1 ? -s * 0.2f : s * 0.12f), s * 0.18f, ink, 255); break;
+    case BADGE_RUN100: for (int k = -1; k <= 0; k++) { dr_line(fb, st, x + k * s * 0.3f - s * 0.1f, y - s * 0.3f, x + k * s * 0.3f + s * 0.15f, y, 1.8f, ink, 255); dr_line(fb, st, x + k * s * 0.3f + s * 0.15f, y, x + k * s * 0.3f - s * 0.1f, y + s * 0.3f, 1.8f, ink, 255); } break;
+    case BADGE_VISITORS5: text_c(fb, st, x, (int)(y - 7), 2, ink, "5"); break;
+    case BADGE_EPIC: for (int k = 0; k < 5; k++) { float a = -1.5708f + k * 2.5133f, a2 = a + 2.5133f; dr_line(fb, st, x + cosf(a) * s * 0.5f, y + sinf(a) * s * 0.5f, x + cosf(a2) * s * 0.5f, y + sinf(a2) * s * 0.5f, 1.4f, ink, 255); } break;
+    case BADGE_BUILD12: text_c(fb, st, x, (int)(y - 7), 2, ink, "12"); break;
+    case BADGE_FRIENDS: dr_disc(fb, st, x - s * 0.18f, y - s * 0.08f, s * 0.22f, ink, 255); dr_disc(fb, st, x + s * 0.18f, y - s * 0.08f, s * 0.22f, ink, 255);
+                        dr_line(fb, st, x - s * 0.36f, y + s * 0.02f, x, y + s * 0.38f, s * 0.2f, ink, 255); dr_line(fb, st, x + s * 0.36f, y + s * 0.02f, x, y + s * 0.38f, s * 0.2f, ink, 255); break;
     case BADGE_ZOO: for (int k = 0; k < 5; k++) dr_disc(fb, st, x + cosf(k * 1.2566f - 1.5708f) * s * 0.45f, y + sinf(k * 1.2566f - 1.5708f) * s * 0.45f, s * 0.16f, got ? dr_hsv(k / 5.0f, 0.6f, 1) : ink, 255); break;
     }
 }
@@ -532,27 +562,29 @@ static void draw_dex(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int st) 
         rect_t r = tile(PAGE_DEX, i);
         bool seen = i < SP_COUNT ? (d->dex & DEX_SPECIES(i)) != 0 : (d->dex & DEX_FORM(i - SP_COUNT)) != 0;
         float cx = r.x + r.w * 0.5f, cy = r.y + r.h * 0.5f;
-        dr_round_rect(fb, st, r.x, r.y, r.w, r.h, 10, i == u->sel ? 0x7FF4FF : 0x2A3A58, 255);
-        dr_round_rect(fb, st, r.x + 2, r.y + 2, r.w - 4, r.h - 4, 9, 0x03050A, 255);
+        uint32_t edge = i == u->sel ? 0x7FF4FF : i < SP_COUNT && SPECIES_FRIENDLY[i] ? 0x2A5848 : 0x2A3A58;
+        dr_round_rect(fb, st, r.x, r.y, r.w, r.h, 9, edge, 255);
+        dr_round_rect(fb, st, r.x + 2, r.y + 2, r.w - 4, r.h - 4, 8, 0x03050A, 255);
         if (!seen) { text_c(fb, st, cx, (int)cy - 7, 2, 0x3A4860, "?"); continue; }
         if (i < SP_COUNT) {
             genome_t g = dish_species_genome((species_t)i);
-            dr_cell_icon(fb, st, (species_t)i, &g, cx, cy, i == SP_PHAGE ? 2.6f : 2.0f, -0.5f, u->clock, false, r.w * 0.5f - 3);
+            float sc = i == SP_PHAGE ? 2.0f : i == SP_CILIATE ? 1.0f : i == SP_MOLD ? 1.6f : 1.5f;
+            dr_cell_icon(fb, st, (species_t)i, &g, NULL, cx, cy, sc, -0.5f, u->clock, false, r.w * 0.5f - 3);
         } else {
             genome_t g = base;
             switch (i - SP_COUNT) { case FORM_WARM: g.heat_opt = 0.85f; break; case FORM_ICY: g.heat_opt = 0.15f; break;
                                     case FORM_SHELL: g.salt_tol = 0.95f; break; default: g.drug_res = 0.8f; }
-            dr_cell_icon(fb, st, (species_t)d->strain[DISH_PET].species, &g, cx, cy, 2.0f, -0.5f, u->clock, false, r.w * 0.5f - 3);
+            dr_cell_icon(fb, st, (species_t)d->strain[DISH_PET].species, &g, NULL, cx, cy, 1.5f, -0.5f, u->clock, false, r.w * 0.5f - 3);
         }
     }
     if (u->sel >= 0) {
         int i = u->sel;
         bool seen = i < SP_COUNT ? (d->dex & DEX_SPECIES(i)) != 0 : (d->dex & DEX_FORM(i - SP_COUNT)) != 0;
         const char *name = !seen ? "NOT FOUND YET" : i < SP_COUNT ? SPECIES_NAMES[i] : FORM_NAMES[i - SP_COUNT];
-        const char *says = !seen ? (i < SP_COUNT ? "ADD IT FROM THE LAB, OR WAIT..." : "RAISE A STRAIN TO EVOLVE IT.") : i < SP_COUNT ? SPECIES_SAYS[i] : FORM_SAYS[i - SP_COUNT];
-        text_c(fb, st, DISH_CX, PY + 182, 2, 0xFFFFFF, name);
-        text_c(fb, st, DISH_CX, PY + 204, 1, 0xB8E8D8, says);
-    } else text_c(fb, st, DISH_CX, PY + 192, 1, 0x5C7598, "TAP ONE TO READ ABOUT IT");
+        const char *says = !seen ? (i < SP_COUNT ? "IT MAY VISIT YOUR DISH ONE DAY..." : "RAISE A STRAIN TO EVOLVE IT.") : i < SP_COUNT ? SPECIES_SAYS[i] : FORM_SAYS[i - SP_COUNT];
+        text_c(fb, st, DISH_CX, PY + 186, 2, 0xFFFFFF, name);
+        text_c(fb, st, DISH_CX, PY + 206, 1, 0xB8E8D8, says);
+    } else text_c(fb, st, DISH_CX, PY + 196, 1, 0x5C7598, "TAP ONE TO READ ABOUT IT");
     button(fb, st, page_done(), 0x10304A, 0x5CC8E0, "BACK", 2);
 }
 static void draw_badges(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int st) {
@@ -564,16 +596,16 @@ static void draw_badges(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int s
         bool got = d->badges >> i & 1;
         if (d->badges_new >> i & 1) dr_ring(fb, st, cx, cy, r.w * 0.5f + 1, 1.6f, 0xFFE07A, (int)(160 + 90 * sinf(u->clock * 5)));
         if (i == u->sel) dr_ring(fb, st, cx, cy, r.w * 0.5f + 1, 1.6f, 0x7FF4FF, 255);
-        badge_glyph(fb, st, i, cx, cy, r.w * 0.5f - 4, got);
+        badge_glyph(fb, st, i, cx, cy, r.w * 0.5f - 3, got);
     }
     if (u->sel >= 0) {
         bool got = d->badges >> u->sel & 1;
-        text_c(fb, st, DISH_CX, PY + 166, 2, got ? 0xFFFFFF : 0x8FA0B8, BADGE_NAMES[u->sel]);
-        text_c(fb, st, DISH_CX, PY + 188, 1, got ? 0xB8E8D8 : 0x5C7598, BADGE_SAYS[u->sel]);
+        text_c(fb, st, DISH_CX, PY + 186, 2, got ? 0xFFFFFF : 0x8FA0B8, BADGE_NAMES[u->sel]);
+        text_c(fb, st, DISH_CX, PY + 206, 1, got ? 0xB8E8D8 : 0x5C7598, BADGE_SAYS[u->sel]);
     } else {
         int n = 0; for (int i = 0; i < BADGE_COUNT; i++) n += d->badges >> i & 1;
         char b[32]; snprintf(b, sizeof b, "%d OF %d EARNED", n, BADGE_COUNT);
-        text_c(fb, st, DISH_CX, PY + 176, 2, 0xC8D8F0, b);
+        text_c(fb, st, DISH_CX, PY + 192, 2, 0xC8D8F0, b);
     }
     button(fb, st, page_done(), 0x10304A, 0x5CC8E0, "BACK", 2);
 }
@@ -584,23 +616,25 @@ static void draw_setup(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int st
         text_c(fb, st, DISH_CX, PY + 18, 3, 0xFFFFFF, "POCKET DISH");
         genome_t g = dish_species_genome(SP_BACILLUS);
         dr_glow(fb, st, DISH_CX, PY + 102, 60, 0x2B8CC0, 70);
-        dr_cell_icon(fb, st, SP_BACILLUS, &g, DISH_CX, PY + 102, 4, sinf(u->clock) * 0.3f, u->clock, true, 0);
+        dr_cell_icon(fb, st, SP_BACILLUS, &g, NULL, DISH_CX, PY + 102, 4, sinf(u->clock) * 0.3f, u->clock, true, 0);
         text_c(fb, st, DISH_CX, PY + 158, 2, 0xC8F4FF, "A TINY WORLD OF GERMS");
         text_c(fb, st, DISH_CX, PY + 180, 1, 0x8FB0D8, "LOOK AFTER YOUR STRAIN AND WATCH IT EVOLVE.");
         button(fb, st, page_done(), 0x103A30, 0x5CE0B0, "START", 2);
         break; }
     case 2:
-        text_c(fb, st, DISH_CX, PY + 18, 2, 0xFFFFFF, "PICK YOUR GERM");
-        for (int k = 0; k < 3; k++) {
+        text_c(fb, st, DISH_CX, PY + 16, 2, 0xFFFFFF, d->run > 1 || d->run_over ? "PICK YOUR NEXT GERM" : "PICK YOUR GERM");
+        for (int k = 0; k < N_STARTERS; k++) {
             rect_t r = starter_tile(k);
             genome_t g = dish_species_genome(STARTERS[k]);
-            bool on = k == u->starter;
+            int unl = dish_unl_for_species(STARTERS[k]);
+            bool on = k == u->starter, locked = !dish_has(d, unl);
             button(fb, st, r, on ? 0x103A4A : 0x0C1424, on ? 0x7FF4FF : 0x2A3A58, NULL, 2);
-            if (on) dr_glow(fb, st, r.x + r.w * 0.5f, r.y + 46, 40, dr_hsv(g.hue, 0.6f, 1), 70);
-            dr_cell_icon(fb, st, STARTERS[k], &g, r.x + r.w * 0.5f, r.y + 46, 2.8f, -0.4f, u->clock, on, r.w * 0.5f - 6);
-            text_c(fb, st, r.x + r.w * 0.5f, r.y + 88, 1, on ? 0xFFFFFF : 0xA0B4D0, SPECIES_NAMES[STARTERS[k]]);
-            text_c(fb, st, r.x + r.w * 0.5f, r.y + 104, 1, on ? 0xB8E8D8 : 0x5C7598, STARTER_SAYS[k]);
+            if (on) dr_glow(fb, st, r.x + r.w * 0.5f, r.y + 28, 30, dr_hsv(g.hue, 0.6f, 1), 70);
+            dr_cell_icon(fb, st, STARTERS[k], &g, NULL, r.x + r.w * 0.5f, r.y + 28, 1.9f, -0.4f, u->clock, on, 24);
+            if (locked) { dr_round_rect(fb, st, r.x + 2, r.y + 2, r.w - 4, r.h - 4, 10, 0x0A1224, 200); draw_lock(fb, st, r.x + r.w * 0.5f - 22, r.y + 28, UNL_COST[unl], d->dna >= UNL_COST[unl]); }
+            text_c(fb, st, r.x + r.w * 0.5f, r.y + r.h - 13, 1, on ? 0xFFFFFF : 0xA0B4D0, SPECIES_NAMES[STARTERS[k]]);
         }
+        text_c(fb, st, DISH_CX, PY + 196, 1, 0xB8E8D8, STARTER_SAYS[u->starter]);
         button(fb, st, page_done(), 0x10304A, 0x5CC8E0, "NEXT", 2);
         break;
     case 3: {
@@ -613,7 +647,7 @@ static void draw_setup(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int st
         text_c(fb, st, DISH_CX, nb.y + 18, 3, 0xFFFFFF, NAMES[u->name_i]);
         text_c(fb, st, DISH_CX, PY + 158, 1, 0x8FB0D8, "TAP THE NAME FOR A SURPRISE");
         genome_t g = dish_species_genome(STARTERS[u->starter]);
-        dr_cell_icon(fb, st, STARTERS[u->starter], &g, DISH_CX, PY + 192, 2.2f, 0, u->clock, true, 0);
+        dr_cell_icon(fb, st, STARTERS[u->starter], &g, NULL, DISH_CX, PY + 192, 2.2f, 0, u->clock, true, 0);
         button(fb, st, page_done(), 0x10304A, 0x5CC8E0, "NEXT", 2);
         break; }
     case 4: {
@@ -635,14 +669,16 @@ static void draw_card(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int st)
     panel(fb, st, PX, PY, PW, PH);
     dr_text(fb, st, PX + 18, PY + 16, 3, 0xFFFFFF, pet->name);
     char b[48];
-    snprintf(b, sizeof b, "A %s STRAIN", SPECIES_NAMES[pet->species]);
+    { char f[32]; dish_form_name(d, DISH_PET, f, sizeof f); int nm = dish_mut_total(d, DISH_PET);
+      if (nm) snprintf(b, sizeof b, "%s  %d MUTATION%s  RUN %d", f, nm, nm > 1 ? "S" : "", d->run);
+      else snprintf(b, sizeof b, "A %s STRAIN  RUN %d", SPECIES_NAMES[pet->species], d->run); }
     dr_text(fb, st, PX + 18, PY + 42, 1, 0x8FB0D8, b);
     /* the portrait: the healthiest cell's genome, alive under glass */
     float px = PX + 66, py = PY + 110;
     dr_disc(fb, st, px, py, 46, 0x03050A, 255);
     dr_glow(fb, st, px, py, 50, 0x2B5C90, 60);
     dr_ring(fb, st, px, py, 46, 1.6f, 0x7FA8D8, 220);
-    dr_cell_icon(fb, st, (species_t)pet->species, &pet->vault, px, py, 4.2f, sinf(u->clock * 0.5f) * 0.4f, u->clock, true, 45);
+    dr_cell_icon(fb, st, (species_t)pet->species, &pet->vault, pet->mut, px, py, 4.2f, sinf(u->clock * 0.5f) * 0.4f, u->clock, true, 45);
     /* the needs */
     int nx = PX + 132, nw = PX + PW - 18 - (nx + 92);
     for (int i = 0; i < NEED_COUNT; i++) {
@@ -707,27 +743,81 @@ static void draw_lab(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int st) 
     button(fb, st, lab_btn(1), d->uv_t > 0 ? 0x3A1060 : 0x1A1030, 0xB07CFF, "UV", 2);
     if (!dish_has(d, UNL_UV)) lock_over(fb, st, d, lab_btn(1), UNL_UV);
     dna_count(fb, st, PX + PW - 40, PY + 20, 2, d->dna);
-    button(fb, st, lab_btn(2), 0x103A30, 0x5CE0B0, "GERMS", 2);
     button(fb, st, page_done(), 0x10304A, 0x5CC8E0, "DONE", 2);
     (void)u;
 }
-static void draw_samples(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int st) {
-    panel(fb, st, PX, PY, PW, PH);
-    text_c(fb, st, DISH_CX, PY + 14, 3, 0xFFFFFF, "NEW GERMS");
-    for (int k = 0; k < 3; k++) {
-        rect_t r = sample_row(k);
-        bool here = false;
-        for (int s = 0; s < DISH_MAX_STRAINS; s++) if (d->strain[s].used && d->strain[s].species == SAMPLES[k] && d->strain[s].count > 0) here = true;   /* (one that died out can come back) */
-        genome_t g = dish_species_genome(SAMPLES[k]);
-        button(fb, st, r, here ? 0x0C1424 : 0x102A3A, here ? 0x2A3A50 : dr_hsv(g.hue, 0.5f, 0.9f), NULL, 2);
-        dr_disc(fb, st, r.x + 28, r.y + r.h * 0.5f, 20, 0x03050A, 255);
-        dr_cell_icon(fb, st, SAMPLES[k], &g, r.x + 28, r.y + r.h * 0.5f, 2.4f, u->clock * 0.3f, u->clock, false, 19);
-        dr_text(fb, st, r.x + 58, r.y + 10, 2, here ? 0x5C7598 : 0xFFFFFF, SPECIES_NAMES[SAMPLES[k]]);
-        int unl = dish_unl_for_species(SAMPLES[k]);
-        if (!here && !dish_has(d, unl)) draw_lock(fb, st, r.x + 64, r.y + 36, UNL_COST[unl], d->dna >= UNL_COST[unl]);
-        else dr_text(fb, st, r.x + 58, r.y + 32, 1, here ? 0x5C7598 : 0xB8E8D8, here ? "ALREADY IN THE DISH" : SAMPLE_SAYS[k]);
+/* a few words over lines of at most `w` px (scale 1): the draft cards' text */
+static int text_wrap(uint16_t *fb, int st, float cx, int y, int w, uint32_t rgb, const char *str) {
+    char line[40]; int n = 0, lines = 0, per = w / 6;
+    const char *p = str;
+    while (*p) {
+        const char *sp = strchr(p, ' '); int wl = sp ? (int)(sp - p) : (int)strlen(p);
+        if (n && n + 1 + wl > per) { line[n] = 0; text_c(fb, st, cx, y + lines * 10, 1, rgb, line); lines++; n = 0; }
+        if (n) line[n++] = ' ';
+        for (int k = 0; k < wl && n < 38; k++) line[n++] = p[k];
+        p += wl; while (*p == ' ') p++;
     }
-    button(fb, st, page_done(), 0x10304A, 0x5CC8E0, "BACK", 2);
+    if (n) { line[n] = 0; text_c(fb, st, cx, y + lines * 10, 1, rgb, line); lines++; }
+    return lines;
+}
+static void draw_draft(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int st) {
+    panel(fb, st, PX, PY, PW, PH);
+    char b[40];
+    snprintf(b, sizeof b, d->drafts > 1 ? "EVOLVE: %d WAITING" : "EVOLVE: PICK ONE", d->drafts);   /* (the font has no brackets) */
+    text_c(fb, st, DISH_CX, PY + 16, 2, 0xFFFFFF, b);
+    float p[P_COUNT]; dish_pressures(d, p);
+    int worst = 0; for (int i = 1; i < P_COUNT; i++) if (p[i] > p[worst]) worst = i;
+    static const uint32_t RIM[3] = { 0x5C7598, 0x5CE0F0, 0xFF6EF0 };
+    static const char *const RAR[3] = { "COMMON", "RARE", "EPIC" };
+    for (int k = 0; k < 3; k++) {
+        int m = d->offer[k];
+        if (m == 0xFF) continue;
+        rect_t r = draft_card(k);
+        const mut_info_t *mi = &MUTS[m];
+        float cx = r.x + r.w * 0.5f;
+        if (mi->rarity == MR_EPIC) dr_glow(fb, st, cx, r.y + r.h * 0.5f, r.w * 0.8f, 0xFF6EF0, (int)(60 + 30 * sinf(u->clock * 3)));
+        dr_round_rect(fb, st, r.x - 1, r.y - 1, r.w + 2, r.h + 2, 12, RIM[mi->rarity], 255);
+        dr_round_rect(fb, st, r.x + 1, r.y + 1, r.w - 2, r.h - 2, 11, 0x0A1428, 255);
+        text_c(fb, st, cx, r.y + 6, 1, RIM[mi->rarity], RAR[mi->rarity]);
+        /* the pet as it would be: its build plus this card */
+        uint8_t mu[DISH_MUT_N]; genome_t g; dish_mut_preview(d, m, mu, &g);
+        dr_disc(fb, st, cx, r.y + 46, 28, 0x03050A, 255);
+        dr_cell_icon(fb, st, (species_t)d->strain[DISH_PET].species, &g, mu, cx, r.y + 46, 2.3f, -0.3f, u->clock, true, 27);
+        int sc = dr_text_w(mi->name, 2) <= r.w - 8 ? 2 : 1;
+        text_c(fb, st, cx, r.y + 82 + (sc == 1 ? 3 : 0), sc, 0xFFFFFF, mi->name);
+        text_wrap(fb, st, cx, r.y + 104, r.w - 8, 0xB8D0EE, mi->says);
+        /* its rank: filled pips owned, the bright one is this card */
+        int have = d->strain[DISH_PET].mut[m];
+        for (int q = 0; q < mi->max_rank; q++) {
+            float qx = cx + (q - (mi->max_rank - 1) * 0.5f) * 12;
+            dr_disc(fb, st, qx, r.y + r.h - 26, 3.5f, q < have ? 0x7FA8D8 : q == have ? 0xFFE07A : 0x2A3448, 255);
+        }
+        if (p[worst] >= 0.3f && (mi->answers >> worst & 1)) {
+            snprintf(b, sizeof b, "VS %s", PRESSURE_NAMES[worst]);
+            text_c(fb, st, cx, r.y + r.h - 14, 1, 0x4CF08C, b);
+        }
+    }
+    button(fb, st, page_done(), 0x10304A, 0x5CC8E0, "LATER", 2);
+}
+static void draw_runover(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int st) {
+    const strain_t *pet = &d->strain[DISH_PET];
+    panel(fb, st, PX, PY, PW, PH);
+    char b[48], f[32];
+    snprintf(b, sizeof b, "RUN %d IS OVER", d->run);
+    text_c(fb, st, DISH_CX, PY + 14, 2, 0xFFFFFF, b);
+    dr_disc(fb, st, PX + 70, PY + 100, 46, 0x03050A, 255);
+    dr_glow(fb, st, PX + 70, PY + 100, 50, dr_hsv(pet->vault.hue, 0.5f, 1), 50);
+    dr_cell_icon(fb, st, (species_t)pet->species, &pet->vault, pet->mut, PX + 70, PY + 100, 3.6f, sinf(u->clock * 0.4f) * 0.3f, u->clock, false, 45);
+    dish_form_name(d, DISH_PET, f, sizeof f);
+    text_wrap(fb, st, PX + 70, PY + 154, 120, 0xC8F4FF, f);
+    int x = PX + 140;
+    snprintf(b, sizeof b, "%s LASTED %u GENERATIONS", pet->name, (unsigned)pet->max_gen);
+    text_wrap(fb, st, x + (PW - 156) * 0.5f, PY + 52, PW - 156, 0xFFFFFF, b);
+    snprintf(b, sizeof b, "MUTATIONS  %d", d->run_muts);           dr_text(fb, st, x, PY + 90, 1, 0xB8D0EE, b);
+    snprintf(b, sizeof b, "THREATS SEEN OFF  %d", d->run_visitors);  dr_text(fb, st, x, PY + 106, 1, 0xB8D0EE, b);
+    snprintf(b, sizeof b, "DNA EARNED  %u", (unsigned)(d->dna - d->run_dna0)); dr_text(fb, st, x, PY + 122, 1, 0xB8D0EE, b);
+    text_wrap(fb, st, x + (PW - 156) * 0.5f, PY + 150, PW - 156, 0x8FB0D8, "YOUR DNA, BADGES AND DEX STAY. A NEW GERM WAITS.");
+    button(fb, st, page_done(), 0x103A30, 0x5CE0B0, "NEW RUN", 2);
 }
 static void draw_meds(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int st) {
     panel(fb, st, PX, PY, PW, PH);
@@ -812,6 +902,14 @@ void dish_ui_render(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int st) {
             draw_icon(fb, st, i, x, y, active, i == (int)alert ? 1 : 0, u->clock);
         }
     }
+    /* a draft waiting: the MUTATE chip, pulsing */
+    if (d->drafts && u->page == PAGE_NONE && !u->setup && u->tool == TOOL_NONE && pet->count > 0) {
+        rect_t r = mutate_chip();
+        float k = 0.5f + 0.5f * sinf(u->clock * 4);
+        dr_glow(fb, st, r.x + r.w * 0.5f, r.y + r.h * 0.5f, r.w * 0.6f, 0xFF6EF0, (int)(50 + 60 * k));
+        snprintf(b, sizeof b, d->drafts > 1 ? "MUTATE x%d" : "MUTATE!", d->drafts);
+        button(fb, st, r, 0x3A1048, 0xFF8AF0, b, 2);
+    }
     /* a tool in hand */
     if (u->tool != TOOL_NONE && u->page == PAGE_NONE) {
         rect_t r = tool_chip();
@@ -824,10 +922,11 @@ void dish_ui_render(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int st) {
         dr_rect(fb, st, 0, 0, DISH_W, DISH_H, 0x000000, 120);
         float k = 0.6f + 0.4f * sinf(u->clock * 3);
         dr_glow(fb, st, DISH_CX, DISH_CY, 70, dr_hsv(pet->vault.hue, 0.5f, 1), (int)(110 * k));
-        dr_cell_icon(fb, st, (species_t)pet->species, &pet->vault, DISH_CX, DISH_CY, 3.2f, 0, u->clock * 0.2f, false, 0);
+        dr_cell_icon(fb, st, (species_t)pet->species, &pet->vault, pet->mut, DISH_CX, DISH_CY, 3.2f, 0, u->clock * 0.2f, false, 0);
         snprintf(b, sizeof b, "%s DIED OUT", pet->name);
         text_c(fb, st, DISH_CX, (int)(DISH_CY - 90), 3, 0xFFFFFF, b);
         text_c(fb, st, DISH_CX, (int)(DISH_CY - 60), 1, 0x8FB0D8, "THE SPORE VAULT IS WAKING IT UP");
+        if (d->run_muts) text_c(fb, st, DISH_CX, (int)(DISH_CY - 48), 1, 0xFFB0BC, d->vault_used ? "" : "IT CAN ONLY DO THIS ONCE A RUN");
         snprintf(b, sizeof b, "%d", (int)ceilf(pet->extinct_t));
         text_c(fb, st, DISH_CX, (int)(DISH_CY + 54), 4, dr_hsv(pet->vault.hue, 0.4f, 1), b);
     }
@@ -835,7 +934,8 @@ void dish_ui_render(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int st) {
     case PAGE_CARD: draw_card(u, d, fb, st); break;
     case PAGE_LAB:  draw_lab(u, d, fb, st); break;
     case PAGE_MEDS: draw_meds(u, d, fb, st); break;
-    case PAGE_SAMPLES: draw_samples(u, d, fb, st); break;
+    case PAGE_DRAFT: draw_draft(u, d, fb, st); break;
+    case PAGE_RUNOVER: draw_runover(u, d, fb, st); break;
     case PAGE_DEX:  draw_dex(u, d, fb, st); break;
     case PAGE_BADGES: draw_badges(u, d, fb, st); break;
     default: break;

@@ -5,6 +5,22 @@ strain of germs, tweaks the dish (heat, pH, salt, light, UV, medicine) and
 watches it evolve. The tank on `main` is untouched; nothing here ships over
 OTA until it is decided to.
 
+## How a run goes
+
+- **The start.** You pick a starter: bacillus, coccus or spirillum for free; cyano, vibrio and myxo for DNA.
+  It starts alone in the dish.
+- **Drafts.** Every 2 generations (about every 6-7 minutes) a MUTATE chip appears and you pick 1 of 3
+  mutation cards (`common/dish_mut.c`, 30 mutations in 6 families, up to 3 ranks each). The cards are
+  weighted by what the dish is doing to your strain, and a strong pressure always gets an answer. Every
+  mutation shows on the cells, and the build names the form ("SPINY GREEN BACILLUS").
+- **Visitors.** A visitor arrives every 3-6 minutes, friendlier early in a run (`dish_prog.c`).
+  - Threats: phages, myxo, rival coccus, mold, vibrio, acid maker, halophile.
+  - Friends: cyano, symbiont, guardian ciliate, plasmid donor.
+  - No threats come before your first mutation. Visitors leave when their time is up.
+- **The end of a run.** Until the first mutation the spore vault always saves the strain. After that it
+  saves it once more, and the next extinction ends the run. DNA, badges, the dex and unlocks carry over to
+  the next run.
+
 ## Where it lives
 
 | | |

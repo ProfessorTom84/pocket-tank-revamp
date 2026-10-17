@@ -53,8 +53,14 @@
 #define FIELD_N          32     /* the nutrient / waste / flow / drug grids are FIELD_N x FIELD_N over the frame */
 #define DISH_PET         0      /* strain 0 is always the keeper's */
 #define DISH_DIV_TIME    2.6f   /* seconds a cell takes to pinch in two */
+#define DISH_DRAFT_GENS  2      /* a mutation draft every this many generations: a lazily kept strain makes
+                                   ~0.3 a minute, so a card every 6-7 minutes */
 
-typedef enum { SP_COCCUS, SP_BACILLUS, SP_SPIRILLUM, SP_CYANO, SP_MYXO, SP_PHAGE, SP_COUNT } species_t;
+/* the first six are the originals (their ids are in saves); the rest arrive as visitors */
+typedef enum { SP_COCCUS, SP_BACILLUS, SP_SPIRILLUM, SP_CYANO, SP_MYXO, SP_PHAGE,
+               SP_MOLD, SP_VIBRIO, SP_LACTO, SP_HALO, SP_SYMBIONT, SP_CILIATE, SP_DONOR, SP_COUNT } species_t;
+extern const bool SPECIES_FRIENDLY[SP_COUNT];   /* a visitor that helps the pet (the toast and the dex say so) */
+#define DISH_MUT_N 30                           /* = M_COUNT (dish_mut.h) */
 extern const char *const SPECIES_NAMES[SP_COUNT];
 
 typedef enum { ST_FORAGE, ST_SWARM, ST_DIVIDE, ST_HUNT, ST_HIDE, ST_REST, ST_SPORE, ST_SPREAD, ST_COUNT } strat_id_t;
@@ -92,6 +98,7 @@ typedef struct {
     uint32_t id;             /* unique while the dish runs (the lens follows this, not the slot) */
     float comfort;           /* last tick's comfort, 0..1 (the census reads it rather than computing it again) */
     uint8_t state, species, strain, host;  /* host: a phage clamped onto a cell (index + 1), 0 when free */
+    uint8_t nbrs;            /* how many cells touched it last tick (biofilm, quorum)*/
     genome_t g;
 } cell_t;
 
@@ -109,6 +116,9 @@ typedef struct {
     genome_t vault;
     float extinct_t;         /* > 0 while extinct: seconds until respawn */
     uint32_t births, deaths, max_gen;
+    /* the build (dish_mut.c): a rank per mutation; only the pet drafts */
+    uint8_t mut[DISH_MUT_N];
+    float stay_t;            /* a visitor: seconds before it starts to leave (<= 0: it is leaving) */
 } strain_t;
 
 typedef enum { PT_DROP, PT_RIPPLE, PT_SHARD, PT_SPARK, PT_HEART } part_kind_t;
@@ -139,11 +149,22 @@ typedef struct {
     float care_cd;
     uint8_t outbreak_on, was_extinct;
     uint32_t next_id;
+    /* the run: one comeback from the vault, then the run is over (dish_prog.c) */
+    uint16_t run, run_visitors;
+    uint8_t vault_used, run_over, run_muts, crispr;   /* crispr: the pet survived an outbreak and remembers it */
+    uint32_t run_dna0;           /* DNA at the run's start (what this run earned) */
+    /* the draft (dish_mut.c) */
+    uint8_t drafts;              /* waiting to be opened, at most 3 */
+    uint8_t offer[3];            /* the dealt cards (0xFF: none dealt) */
+    uint32_t next_draft_gen;
+    /* the visitors */
+    float visit_t, gift_cd;
 } dish_t;
 
 typedef strat_t (*dish_brain_fn)(const dish_t *d, int strain);
 
 void dish_init(dish_t *d, uint32_t seed, species_t pet, const char *pet_name);
+void dish_new_run(dish_t *d, uint32_t seed, species_t pet, const char *pet_name);   /* a fresh dish that keeps DNA, badges, dex, unlocks */
 void dish_tick(dish_t *d, float dt, dish_brain_fn brain);
 void dish_sleep(dish_t *d, float seconds);              /* time away (asleep, off), lived through in one step */
 
@@ -166,7 +187,9 @@ void dish_dose(dish_t *d, float x, float y, float amount);   /* antibiotic */
 void dish_antiviral(dish_t *d);                              /* clears the free phages */
 void dish_wipe(dish_t *d, float x, float y, float r);        /* wipes waste under a stroke */
 void dish_uv(dish_t *d, float seconds);                      /* the UV lamp: more mutations, a little harm */
-int  dish_add_sample(dish_t *d, species_t sp);               /* a new colony from the sample rack (-1: no room, or already here) */
+int  dish_add_sample(dish_t *d, species_t sp);               /* a new colony mid-dish (-1: no room, or already here) */
+int  dish_visit(dish_t *d, species_t sp);                    /* a visitor arrives at the glass's edge (-1: no room, or here) */
+bool dish_visitor_here(const dish_t *d, species_t sp);       /* living cells of that kind, not the pet's */
 float dish_stress(const dish_t *d, const cell_t *c, float *comfort);   /* harm/s from heat, pH, salt, UV; comfort 0..1 */
 void dish_outbreak(dish_t *d, int n);                        /* wild phages drift in from the rim */
 
@@ -182,7 +205,9 @@ int   dish_cell_at(const dish_t *d, float x, float y, float slop);   /* the livi
 float dish_cell_radius(const cell_t *c);
 
 /* events (sounds are feedback, never behavior: one listener, may only enqueue) */
-enum { DEV_FEED, DEV_DIVIDE, DEV_POP, DEV_BURST, DEV_INFECT, DEV_EXTINCT, DEV_RESPAWN, DEV_OUTBREAK, DEV_STRAT, DEV_BADGE, DEV_COUNT };   /* DEV_BADGE: strain = the badge */
+enum { DEV_FEED, DEV_DIVIDE, DEV_POP, DEV_BURST, DEV_INFECT, DEV_EXTINCT, DEV_RESPAWN, DEV_OUTBREAK, DEV_STRAT, DEV_BADGE,
+       DEV_VISIT, DEV_VISIT_GONE, DEV_GIFT, DEV_DRAFT, DEV_RUN_OVER, DEV_COUNT };
+/* DEV_BADGE: strain = the badge; DEV_VISIT / DEV_VISIT_GONE: strain = the species; DEV_GIFT: a free card (gene transfer) */
 typedef void (*dish_event_fn)(int ev, int strain, void *ud);
 void dish_events_set(dish_event_fn fn, void *ud);
 void dish_emit(int ev, int strain);
