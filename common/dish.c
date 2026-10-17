@@ -48,8 +48,8 @@ bool dish_inside(float x, float y, float m) {
 /* ---- fields ---- */
 static int fidx(float x, float y) {
     int i = (int)(x / FCW), j = (int)(y / FCH);
-    if (i < 0) i = 0; if (i >= FIELD_N) i = FIELD_N - 1;
-    if (j < 0) j = 0; if (j >= FIELD_N) j = FIELD_N - 1;
+    if (i < 0) { i = 0; } if (i >= FIELD_N) { i = FIELD_N - 1; }
+    if (j < 0) { j = 0; } if (j >= FIELD_N) { j = FIELD_N - 1; }
     return j * FIELD_N + i;
 }
 float dish_field(const float *f, float x, float y) {
@@ -317,8 +317,8 @@ static void grid_build(const dish_t *d) {
         const cell_t *c = &d->cell[i];
         if (c->state != CS_LIVE && c->state != CS_SPORE) continue;
         int gx = (int)(c->x / GRID_PX), gy = (int)(c->y / GRID_PX);
-        if (gx < 0) gx = 0; if (gx >= GW) gx = GW - 1;
-        if (gy < 0) gy = 0; if (gy >= GH) gy = GH - 1;
+        if (gx < 0) { gx = 0; } if (gx >= GW) { gx = GW - 1; }
+        if (gy < 0) { gy = 0; } if (gy >= GH) { gy = GH - 1; }
         g_next[i] = g_head[gy * GW + gx]; g_head[gy * GW + gx] = (int16_t)i;
     }
 }

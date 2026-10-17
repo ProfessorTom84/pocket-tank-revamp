@@ -450,7 +450,15 @@ static int selftest_prog(void) {
 static int selftest_render(void) {
     dish_init(&dish, 51, SP_BACILLUS, "BLIP"); dish_ui_init(&ui);
     run(&dish, 200, 15, false); dish_outbreak(&dish, 6); run(&dish, 10, 0, false);
-    dish.uv_t = 3; dish_feed(&dish, DISH_CX, DISH_CY, 1); run(&dish, 0.1f, 0, false);   /* everything at once: lamp, drop, ripples */
+    dish.uv_t = 3; dish_feed(&dish, DISH_CX, DISH_CY, 1);   /* everything at once: lamp, drop, ripples */
+    for (int k = 0; k < 3; k++)                       /* and food glowing under the lamp's glints on the rim: the two must overlap */
+        dish_feed(&dish, DISH_CX + cosf(-2.356f) * (DISH_RX - 14), DISH_CY + sinf(-2.356f) * (DISH_RY - 14), 1);
+    run(&dish, 0.1f, 0, false);
+    {   /* a bacillus just under the split, heading down: its tail crosses into the top band */
+        genome_t g = dish_species_genome(SP_BACILLUS);
+        int i = dish_spawn(&dish, DISH_PET, DISH_CX + 30, DISH_H / 2 + 16, &g);   /* (16: past a 3-radius cull, the tail still ~9 px over) */
+        if (i >= 0) dish.cell[i].ang = 1.5708f;
+    }
     /* 1. no caches: the full frame */
     dish_render_set_scene(NULL); dish_render_set_background(NULL);
     dish_render(&dish, fb, DISH_W);
@@ -460,6 +468,8 @@ static int selftest_render(void) {
     dish_render_band(&dish, fb2, DISH_W, DISH_H / 2, DISH_H);
     int diff = 0, lit = 0;
     for (int i = 0; i < DISH_W * DISH_H; i++) { diff += fb[i] != fb2[i]; lit += fb[i] > 0x0841; }
+    if (diff) for (int i = 0, shown = 0; i < DISH_W * DISH_H && shown < 8; i++)
+        if (fb[i] != fb2[i]) { printf("  differs at %d,%d: %04x vs %04x\n", i % DISH_W, i / DISH_W, fb[i], fb2[i]); shown++; }
     CHECK(diff == 0, "the cached two-band frame differs from the plain frame in %d pixels", diff);
     CHECK(lit > DISH_W * DISH_H / 4, "the frame is mostly black (%d lit)", lit);
     /* 3. a band never writes outside its rows */

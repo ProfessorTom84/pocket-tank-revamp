@@ -52,7 +52,7 @@ static inline void px_add(const view_t *v, int x, int y, int r, int g, int b) {
     uint16_t *p = &v->fb[y * v->stride + x];
     int pr = (*p >> 11) << 3, pg = ((*p >> 5) & 63) << 2, pb = (*p & 31) << 3;
     pr += r; pg += g; pb += b;
-    if (pr > 255) pr = 255; if (pg > 255) pg = 255; if (pb > 255) pb = 255;
+    if (pr > 255) { pr = 255; } if (pg > 255) { pg = 255; } if (pb > 255) { pb = 255; }
     *p = (uint16_t)(((pr >> 3) << 11) | ((pg >> 2) << 5) | (pb >> 3));
 }
 static inline void px_over(const view_t *v, int x, int y, uint32_t rgb, int a) {
@@ -84,8 +84,8 @@ uint32_t dr_hsv(float h, float s, float v) {
 static void v_glow(const view_t *v, float x, float y, float r, uint32_t rgb, float k) {
     if (r < 0.6f) r = 0.6f;
     int xa = (int)floorf(x - r), xb = (int)ceilf(x + r), ya = (int)floorf(y - r), yb = (int)ceilf(y + r);
-    if (ya < v->y0) ya = v->y0; if (yb > v->y1 - 1) yb = v->y1 - 1;
-    if (xa < v->x0) xa = v->x0; if (xb > v->x1 - 1) xb = v->x1 - 1;
+    if (ya < v->y0) { ya = v->y0; } if (yb > v->y1 - 1) { yb = v->y1 - 1; }
+    if (xa < v->x0) { xa = v->x0; } if (xb > v->x1 - 1) { xb = v->x1 - 1; }
     float ir2 = 1.0f / (r * r);
     for (int yy = ya; yy <= yb; yy++)
         for (int xx = xa; xx <= xb; xx++) {
@@ -115,8 +115,8 @@ static void v_line(const view_t *v, float x0, float y0, float x1, float y1, floa
     float hw = w * 0.5f + 0.6f;
     int xa = (int)floorf(fminf(x0, x1) - hw), xb = (int)ceilf(fmaxf(x0, x1) + hw);
     int ya = (int)floorf(fminf(y0, y1) - hw), yb = (int)ceilf(fmaxf(y0, y1) + hw);
-    if (ya < v->y0) ya = v->y0; if (yb > v->y1 - 1) yb = v->y1 - 1;
-    if (xa < v->x0) xa = v->x0; if (xb > v->x1 - 1) xb = v->x1 - 1;
+    if (ya < v->y0) { ya = v->y0; } if (yb > v->y1 - 1) { yb = v->y1 - 1; }
+    if (xa < v->x0) { xa = v->x0; } if (xb > v->x1 - 1) { xb = v->x1 - 1; }
     float vx = x1 - x0, vy = y1 - y0, l2 = vx * vx + vy * vy + 1e-6f;
     for (int yy = ya; yy <= yb; yy++)
         for (int xx = xa; xx <= xb; xx++) {
@@ -155,8 +155,8 @@ static void v_cell(const view_t *v, const seg_t *sg, int n, float r, const shade
         ya = fminf(ya, fminf(sg[k].ay, sg[k].by)); yb = fmaxf(yb, fmaxf(sg[k].ay, sg[k].by));
     }
     int x0 = (int)floorf(xa - ext), x1 = (int)ceilf(xb + ext), y0 = (int)floorf(ya - ext), y1 = (int)ceilf(yb + ext);
-    if (x0 < v->x0) x0 = v->x0; if (y0 < v->y0) y0 = v->y0;
-    if (x1 > v->x1 - 1) x1 = v->x1 - 1; if (y1 > v->y1 - 1) y1 = v->y1 - 1;
+    if (x0 < v->x0) { x0 = v->x0; } if (y0 < v->y0) { y0 = v->y0; }
+    if (x1 > v->x1 - 1) { x1 = v->x1 - 1; } if (y1 > v->y1 - 1) { y1 = v->y1 - 1; }
     float ir2 = 64.0f / (r * r);
     float br = ((sh->body >> 16) & 255) * sh->kf * v->dim, bg = ((sh->body >> 8) & 255) * sh->kf * v->dim, bb = (sh->body & 255) * sh->kf * v->dim;
     float rr = ((sh->rim >> 16) & 255) * sh->kr * v->dim, rg = ((sh->rim >> 8) & 255) * sh->kr * v->dim, rb = (sh->rim & 255) * sh->kr * v->dim;
@@ -190,8 +190,8 @@ static const uint8_t BAYER4[16] = { 0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 
 static inline uint16_t pack_dither(float r, float g, float b, int x, int y) {
     float dth = (BAYER4[(y & 3) * 4 + (x & 3)] + 0.5f) / 16.0f;
     int ri = (int)(r / 8 + dth), gi = (int)(g / 4 + dth), bi = (int)(b / 8 + dth);
-    if (ri > 31) ri = 31; if (gi > 63) gi = 63; if (bi > 31) bi = 31;
-    if (ri < 0) ri = 0; if (gi < 0) gi = 0; if (bi < 0) bi = 0;
+    if (ri > 31) { ri = 31; } if (gi > 63) { gi = 63; } if (bi > 31) { bi = 31; }
+    if (ri < 0) { ri = 0; } if (gi < 0) { gi = 0; } if (bi < 0) { bi = 0; }
     return (uint16_t)((ri << 11) | (gi << 5) | bi);
 }
 static uint32_t hash2(int x, int y) { uint32_t h = (uint32_t)x * 374761393u + (uint32_t)y * 668265263u; h = (h ^ (h >> 13)) * 1274126177u; return h ^ (h >> 16); }
@@ -516,7 +516,7 @@ static void draw_world(const view_t *v, const dish_t *d) {
             if (c->state == CS_FREE) continue;
             int want = c->species == SP_PHAGE ? 2 : (c->state == CS_LIVE ? 1 : 0);
             if (want != pass) continue;
-            float r = dish_cell_radius(c) * 3 * v->s, x = WX(v, c->x), y = WY(v, c->y);
+            float r = dish_cell_radius(c) * 7 * v->s, x = WX(v, c->x), y = WY(v, c->y);   /* 7 radii: a bacillus's tail reaches ~5.5 behind it (a band culled it at 3) */
             if (x + r < v->x0 || x - r >= v->x1 || y + r < v->y0 || y - r >= v->y1) continue;
             draw_cell(v, d->clock, c);
         }
@@ -548,8 +548,11 @@ void dish_render_band(const dish_t *d, uint16_t *fb, int stride, int y0, int y1)
     prof(0);
     view_t v = frame_view(fb, stride);
     v.y0 = y0; v.y1 = y1;
-    v.fields_baked = g_scene && g_bg;
     v.dim = d->light ? 1.0f : 0.55f;
+    /* the field glow goes down here, before the glints, whether or not the background holds it:
+       saturating 565 adds don't commute, so the order must be the same either way */
+    if (!(g_scene && g_bg)) draw_fields_glow(&v, d);
+    v.fields_baked = true;
     /* the lamp's glints wander a little round the rim */
     for (int k = 0; k < 3; k++) {
         float a = -2.356f + (k - 1) * 0.35f + sinf(d->clock * 0.23f + k * 2.1f) * 0.12f;

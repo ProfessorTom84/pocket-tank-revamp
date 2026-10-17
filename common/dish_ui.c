@@ -472,7 +472,7 @@ static void dna_glyph(uint16_t *fb, int st, float x, float y, float s) {
     }
 }
 static void dna_count(uint16_t *fb, int st, float cx, int y, int sc, uint32_t dna) {
-    char b[16]; snprintf(b, sizeof b, "%u", dna);
+    char b[16]; snprintf(b, sizeof b, "%u", (unsigned)dna);   /* (uint32_t is unsigned long on the S3) */
     int w = dr_text_w(b, sc) + 7 * sc + 4;
     dna_glyph(fb, st, cx - w * 0.5f + 3 * sc, y + 3.5f * sc, 3.5f * sc);
     dr_text(fb, st, (int)(cx - w * 0.5f + 7 * sc + 4), y, sc, 0xEAF4FF, b);
@@ -650,11 +650,11 @@ static void draw_card(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int st)
         dr_text(fb, st, PX + 18, y, 1, 0x8FB0D8, tn[i]);
         bar(fb, st, PX + 62, y, 54, 7, tv[i], dr_hsv(g->hue, 0.5f, 1));
     }
-    snprintf(b, sizeof b, "CELLS %d   GEN %u", pet->count, pet->max_gen);
+    snprintf(b, sizeof b, "CELLS %d   GEN %u", pet->count, (unsigned)pet->max_gen);
     dr_text(fb, st, nx, PY + 186, 2, 0xFFFFFF, b);
     snprintf(b, sizeof b, "%s", pet->count ? DOING[pet->strat.id] : "IN THE SPORE VAULT");
     dr_text(fb, st, nx, PY + 204, 1, 0x7FF4FF, b);
-    snprintf(b, sizeof b, "BORN %u  LOST %u", pet->births, pet->deaths);   /* (above the card's buttons) */
+    snprintf(b, sizeof b, "BORN %u  LOST %u", (unsigned)pet->births, (unsigned)pet->deaths);   /* (above the card's buttons) */
     dr_text(fb, st, nx, PY + 216, 1, 0x8FB0D8, b);
     dna_count(fb, st, PX + PW - 46, PY + 20, 2, d->dna);
     button(fb, st, card_btn(0), 0x102A3A, 0x5CC8E0, "DEX", 2);
@@ -771,7 +771,7 @@ void dish_ui_render(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int st) {
         dr_ring(fb, st, c->x, c->y, dish_cell_radius(c) * 2.6f, 1, 0x7FF4FF, 160);
         dish_render_lens(d, c->x, c->y, u->lens_zoom, fb, st, lx, ly, lr);
         const char *who = c->strain == DISH_PET ? pet->name : SPECIES_NAMES[c->species];
-        snprintf(b, sizeof b, "%s  GEN %u", who, c->gen);
+        snprintf(b, sizeof b, "%s  GEN %u", who, (unsigned)c->gen);
         int w = dr_text_w(b, 1) + 14;
         dr_round_rect(fb, st, (int)(lx - w / 2), (int)(ly + lr - 18), w, 13, 6, 0x0A1224, 220);
         text_c(fb, st, lx, (int)(ly + lr - 15), 1, 0xC8F4FF, b);
