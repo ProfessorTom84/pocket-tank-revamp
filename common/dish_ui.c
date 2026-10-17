@@ -668,7 +668,7 @@ static void draw_card(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int st)
     const strain_t *pet = &d->strain[DISH_PET];
     panel(fb, st, PX, PY, PW, PH);
     dr_text(fb, st, PX + 18, PY + 16, 3, 0xFFFFFF, pet->name);
-    char b[48];
+    char b[80];                                   /* (room for the longest form name, count and run: GCC checks) */
     { char f[32]; dish_form_name(d, DISH_PET, f, sizeof f); int nm = dish_mut_total(d, DISH_PET);
       if (nm) snprintf(b, sizeof b, "%s  %d MUTATION%s  RUN %d", f, nm, nm > 1 ? "S" : "", d->run);
       else snprintf(b, sizeof b, "A %s STRAIN  RUN %d", SPECIES_NAMES[pet->species], d->run); }
