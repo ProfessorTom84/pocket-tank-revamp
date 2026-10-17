@@ -33,6 +33,16 @@ That writes PPM frames of every page. With SDL2 installed (`brew install sdl2`),
 `make dish` also builds the window: the mouse is the finger. Keys:
 N light, O outbreak, F 10x time, D +50 DNA, S save, X new dish, Q quit.
 
+## Play it in a browser
+
+The same C code compiled to WebAssembly: all four board shapes, the mouse or a finger as the finger on the glass, sound, and a save per board kept in the browser. Needs Emscripten once (`brew install emscripten`), then:
+
+```bash
+make -C sim web-serve
+```
+
+Open http://localhost:8642. The page has to come from a server: opened as a file, the browser won't load the modules. `make -C sim web` only builds `sim/web-dist/`. The page source is `sim/web/index.html`, and the C entry points are in `sim/web_main.c`.
+
 ## Build it for a board
 
 The board's own overlay first, then `sdkconfig.dish`, in its own build directory:

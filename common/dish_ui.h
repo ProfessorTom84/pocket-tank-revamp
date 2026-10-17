@@ -23,14 +23,14 @@ typedef struct {
     page_t page;
     tool_t tool; float tool_idle;
     int lens;                    /* the cell under the microscope, -1 none */
-    uint32_t lens_gen;           /* (its generation: a reused slot is a different cell) */
+    uint32_t lens_id;            /* (its id: a reused slot is a different cell) */
     float lens_zoom;
     /* touch tracking */
     bool down; float dx0, dy0, lx, ly, down_t, still_t; bool dragged, warmed;
     float tap_t[3]; int taps;
     /* toasts and moments */
     char toast[40]; float toast_t;
-    float heart_t, emote_t; int emote;
+    float emote_cd, emote_t; int emote;   /* emote_cd: the wait before the next emote */
     float extinct_show, back_show;
     float clock;
     int sel;                     /* the dex's / badges' tile being read, -1 none */

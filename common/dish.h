@@ -78,6 +78,8 @@ typedef struct {
     float dying_t;           /* the pop animation */
     float phase;             /* animation phase (flagellum, wobble, blink) */
     uint32_t gen;            /* generation (the founders are 0) */
+    uint32_t id;             /* unique while the dish runs (the lens follows this, not the slot) */
+    float comfort;           /* last tick's comfort, 0..1 (the census reads it rather than computing it again) */
     uint8_t state, species, strain, host;  /* host: a phage clamped onto a cell (index + 1), 0 when free */
     genome_t g;
 } cell_t;
@@ -125,6 +127,7 @@ typedef struct {
     uint32_t dna, badges, badges_new, dex, unlocked, births_paid;
     float care_cd;
     uint8_t outbreak_on, was_extinct;
+    uint32_t next_id;
 } dish_t;
 
 typedef strat_t (*dish_brain_fn)(const dish_t *d, int strain);

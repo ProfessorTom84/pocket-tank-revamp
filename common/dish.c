@@ -194,6 +194,7 @@ int dish_spawn(dish_t *d, int strain, float x, float y, const genome_t *g) {
             c->energy = 0.55f; c->health = 1;
             c->phase = dish_rand(d, 0, TAU);
             c->run_t = dish_rand(d, 0.2f, 1.5f);
+            c->id = ++d->next_id; c->comfort = 1;
             return i;
         }
     return -1;
@@ -269,10 +270,18 @@ void dish_wipe(dish_t *d, float x, float y, float r) {
 }
 void dish_uv(dish_t *d, float seconds) { d->uv_t = seconds; }
 static int strain_of(const dish_t *d, species_t sp);
+/* the living cells of a strain right now (the census's count is a tick old) */
+static int strain_cells(const dish_t *d, int s) {
+    int n = 0;
+    for (int i = 0; i < DISH_MAX_CELLS; i++) n += d->cell[i].strain == s && (d->cell[i].state == CS_LIVE || d->cell[i].state == CS_SPORE);
+    return n;
+}
 int dish_add_sample(dish_t *d, species_t sp) {
-    if (strain_of(d, sp) >= 0) return -1;
-    int s = dish_add_strain(d, sp, NULL);
+    int s = strain_of(d, sp);
+    if (s >= 0 && strain_cells(d, s) > 0) return -1;        /* here already */
+    if (s < 0) s = dish_add_strain(d, sp, NULL);            /* (a strain that died out keeps its slot: it is simply reseeded) */
     if (s < 0) return -1;
+    d->strain[s].extinct_t = 0;
     float a = dish_rand(d, 0, TAU), x = DISH_CX + cosf(a) * DISH_RX * 0.45f, y = DISH_CY + sinf(a) * DISH_RY * 0.45f;
     seed_colony(d, s, sp == SP_MYXO ? 4 : 6, x, y, 16, NULL);
     for (int i = 0; i < DISH_MAX_CELLS; i++) if (d->cell[i].strain == s && d->cell[i].state == CS_LIVE) d->cell[i].energy = 0.8f;
@@ -348,10 +357,12 @@ static void divide(dish_t *d, int i) {
     genome_t g = mutate(d, &parent.g, rate);
     int j = dish_spawn(d, c->strain, c->x + ax * r, c->y + ay * r, &g);
     c = &d->cell[i];                              /* (same pool; the pointer is still good) */
+    c->div_t = 0;
+    if (j < 0) return;                            /* no room for a daughter: the pinch undoes, the energy is kept */
     c->x -= ax * r * 0.5f; c->y -= ay * r * 0.5f;
-    c->energy = parent.energy * 0.45f; c->div_t = 0;
+    c->energy = parent.energy * 0.45f;
     strain_t *st = &d->strain[c->strain];
-    if (j >= 0) {
+    {
         cell_t *n = &d->cell[j];
         n->energy = c->energy; n->ang = c->ang + dish_rand(d, -0.3f, 0.3f);
         n->gen = parent.gen + 1; n->health = parent.health;
@@ -435,6 +446,7 @@ static void cell_tick(dish_t *d, int i, float dt) {
 
     /* ---- metabolism, food, the light ---- */
     float comfort, env = dish_stress(d, c, &comfort);
+    c->comfort = comfort;
     float metab = sp->metab * (0.6f + 0.4f * c->g.speed * c->g.size) * (strat == ST_REST ? 0.45f : 1) * (spore ? 0.05f : 1);
     if (!sp->virus) {
         c->energy -= metab * dt;
@@ -615,8 +627,7 @@ static void census(dish_t *d) {
         if (c->state == CS_DYING) continue;
         int s = c->strain; cnt[s]++;
         if (c->state == CS_SPORE) spores[s]++;
-        float cf; dish_stress(d, c, &cf);
-        acc[s][0] += c->energy; acc[s][1] += c->health; acc[s][2] += cf;
+        acc[s][0] += c->energy; acc[s][1] += c->health; acc[s][2] += c->comfort;   /* (cell_tick's, a tick old) */
         acc[s][3] += dish_field(d->waste, c->x, c->y); acc[s][4] += c->infect > 0;
         acc[s][5] += c->x; acc[s][6] += c->y;
         int gx = (int)(c->x / GRID_PX), gy = (int)(c->y / GRID_PX), n = 0;
@@ -728,11 +739,13 @@ static void r_bytes(rbuf_t *r, void *v, size_t n) {
 static float r_q8(rbuf_t *r, float lo, float hi) { uint8_t b; r_bytes(r, &b, 1); return lo + (hi - lo) * b / 255.0f; }
 static float r_u16(rbuf_t *r, float lo, float hi) { uint16_t b; r_bytes(r, &b, 2); return lo + (hi - lo) * b / 65535.0f; }
 #define GENES ((int)(sizeof(genome_t) / sizeof(float)))
+static float fin(float v, float lo, float hi, float dflt) { return v >= lo && v <= hi ? v : dflt; }   /* (NaN fails both tests) */
 static const float GLO[GENES] = { 0.5f, 0.75f, 0, 0, 0, 0, 0, 0.6f, 0 }, GHI[GENES] = { 1.6f, 1.35f, 1, 1, 1, 1, 1, 1.6f, 1 };
 
 size_t dish_save(const dish_t *d, uint8_t *out, size_t cap) {
     wbuf_t w = { out, 0, cap, true };
-    uint32_t magic = SAVE_MAGIC; uint16_t ver = 3;   /* v2 (phase 3): pH, salt, ph_opt - nothing shipped v1, so it is refused; v3: progression at the tail */
+    uint32_t magic = SAVE_MAGIC; uint16_t ver = 4;   /* v2 (phase 3): pH, salt, ph_opt - nothing shipped v1, so it is refused; v3: progression at the tail;
+                                                       v4: each cell's age, and the badges' trackers */
     w_bytes(&w, &magic, 4); w_bytes(&w, &ver, 2);
     w_bytes(&w, &d->temp, 4); w_bytes(&w, &d->clock, 4); w_bytes(&w, &d->outbreak_t, 4);
     uint8_t light = d->light; w_bytes(&w, &light, 1);
@@ -758,10 +771,14 @@ size_t dish_save(const dish_t *d, uint8_t *out, size_t cap) {
         w_q8(&w, c->energy, 0, 1.1f); w_q8(&w, c->health, 0, 1); w_q8(&w, c->infect, 0, 1); w_q8(&w, fmodf(c->ang + 100 * TAU, TAU), 0, TAU);
         const float *g = &c->g.speed;
         for (int k = 0; k < GENES; k++) w_q8(&w, g[k], GLO[k], GHI[k]);
+        uint16_t age = c->age > 65535 ? 65535 : (uint16_t)c->age;   /* v4 */
+        w_bytes(&w, &age, 2);
     }
     /* v3 */
     uint32_t prog[6] = { d->dna, d->badges, d->badges_new, d->dex, d->unlocked, d->births_paid };
     w_bytes(&w, prog, sizeof prog);
+    uint8_t track[2] = { d->outbreak_on, d->was_extinct };          /* v4 */
+    w_bytes(&w, track, 2);
     return w.ok ? w.n : 0;
 }
 
@@ -773,10 +790,11 @@ bool dish_load(dish_t *d, const uint8_t *in, size_t len, uint32_t seed) {
     /* the shape is checked before anything is written, so a bad save leaves the dish alone
      * (no second 45 KB dish to load beside: on the device that would be internal RAM) */
     const size_t strain_b = 3 + sizeof d->strain[0].name + 16 + sizeof(genome_t);
-    const size_t n_at = 6 + 21 + DISH_MAX_STRAINS * strain_b + 3 * FIELD_N * FIELD_N, cell_b = 13 + GENES;
+    const size_t n_at = 6 + 21 + DISH_MAX_STRAINS * strain_b + 3 * FIELD_N * FIELD_N, cell_b = 13 + GENES + (ver >= 4 ? 2 : 0);
     if (len < n_at + 2) return false;
     uint16_t nc; memcpy(&nc, in + n_at, 2);
-    if (nc > DISH_MAX_CELLS || len != n_at + 2 + nc * cell_b + (ver >= 3 ? 24 : 0) || !in[6 + 21]) return false;   /* (+27: strain 0 used) */
+    size_t tail = ver >= 4 ? 24 + 2 : ver >= 3 ? 24 : 0;
+    if (nc > DISH_MAX_CELLS || len != n_at + 2 + nc * cell_b + tail || !in[6 + 21]) return false;   /* (+27: strain 0 used) */
     dish_t *dp = d;
     #define nd (*dp)
     memset(&nd, 0, sizeof nd);
@@ -807,12 +825,25 @@ bool dish_load(dish_t *d, const uint8_t *in, size_t len, uint32_t seed) {
         c->energy = r_q8(&r, 0, 1.1f); c->health = r_q8(&r, 0, 1); c->infect = r_q8(&r, 0, 1); c->ang = r_q8(&r, 0, TAU);
         float *g = &c->g.speed;
         for (int k = 0; k < GENES; k++) g[k] = r_q8(&r, GLO[k], GHI[k]);
+        if (ver >= 4) { uint16_t age; r_bytes(&r, &age, 2); c->age = age; }
         c->phase = dish_rand(&nd, 0, TAU); c->run_t = dish_rand(&nd, 0.2f, 1.5f);
+        c->id = ++nd.next_id; c->comfort = 1;
         if (!nd.strain[c->strain].used) c->state = CS_FREE;
     }
     if (ver >= 3) {
         uint32_t prog[6]; r_bytes(&r, prog, sizeof prog);
         nd.dna = prog[0]; nd.badges = prog[1]; nd.badges_new = prog[2]; nd.dex = prog[3]; nd.unlocked = prog[4]; nd.births_paid = prog[5];
+    }
+    if (ver >= 4) { uint8_t track[2]; r_bytes(&r, track, 2); nd.outbreak_on = track[0] != 0; nd.was_extinct = track[1] != 0; }
+    /* the raw floats are trusted no further than their ranges: a flipped bit must not load a NaN into the world */
+    nd.temp = fin(nd.temp, 0.05f, 0.95f, 0.5f); nd.ph = fin(nd.ph, 0, 1, 0.5f); nd.salt = fin(nd.salt, 0, 1, 0.2f);
+    nd.clock = fin(nd.clock, 0, 1e9f, 0); nd.outbreak_t = fin(nd.outbreak_t, 0, 3600, 300);
+    for (int s = 0; s < DISH_MAX_STRAINS; s++) {
+        strain_t *st = &nd.strain[s];
+        st->extinct_t = fin(st->extinct_t, 0, WILD_BACK_S, 0);
+        const float *g = &st->vault.speed;
+        for (int k = 0; k < GENES; k++)
+            if (!(g[k] >= GLO[k] && g[k] <= GHI[k])) { st->vault = dish_species_genome((species_t)st->species); break; }
     }
     #undef nd
     return r.ok;
@@ -831,6 +862,7 @@ void dish_sleep(dish_t *d, float seconds) {
         if (c->state == CS_FREE) continue;
         if (c->state == CS_DYING || SP[c->species].virus) { c->state = CS_FREE; continue; }
         c->energy -= SP[c->species].metab * 0.0015f * t * (c->state == CS_SPORE ? 0.05f : 1);
+        if (c->state != CS_SPORE) c->age += t * 0.0015f;   /* (the fridge slows aging as much as hunger) */
         c->div_t = 0; c->infect = 0;
         if (c->energy <= 0) {                             /* starved in the dark: no pop, it's just gone in the morning */
             c->state = CS_FREE;

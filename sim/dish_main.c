@@ -169,7 +169,7 @@ static int snapshot(const char *pre) {
     const strain_t *pet = &dish.strain[DISH_PET];
     int ci = -1; for (int i = 0; i < DISH_MAX_CELLS; i++) if (dish.cell[i].strain == DISH_PET && dish.cell[i].state == CS_LIVE && dish.cell[i].g.drug_res > 0.5f && dish.cell[i].g.salt_tol > 0.7f) { ci = i; break; }
     (void)pet;
-    if (ci >= 0) { ui.lens = ci; ui.lens_gen = dish.cell[ci].gen; shot(pre, "evolved"); }
+    if (ci >= 0) { ui.lens = ci; ui.lens_id = dish.cell[ci].id; shot(pre, "evolved"); }
     ui.lens = -1;
     /* phase 4: the card's buttons, the dex, the badges, the setup */
     dish.badges |= 1u << BADGE_FIRST_SPLIT | 1u << BADGE_GEN10 | 1u << BADGE_COMEBACK | 1u << BADGE_SHELL | 1u << BADGE_ZOO;
@@ -207,6 +207,16 @@ static int selftest_pet(void) {
     CHECK(heard == SND_CARD_OPEN, "the card opened silently");
     ui.page = PAGE_NONE; run(&dish, 0.05f, 0, false);
     while (dish_ui_take_sound(&ui, &pitch) >= 0) {}
+    {   /* a slow press on FEED is still a press: it feeds, and warms nothing */
+        float fx, fy; dish_ui_icon_pos(ICON_FEED, &fx, &fy);
+        float n0 = 0; for (int c = 0; c < FIELD_N * FIELD_N; c++) n0 += dish.nutr[c];
+        dish.warm = 0;
+        dish_ui_touch(&ui, &dish, fx, fy, true); run(&dish, 1.2f, 0, false); dish_ui_touch(&ui, &dish, fx, fy, false);
+        float n1 = 0; for (int c = 0; c < FIELD_N * FIELD_N; c++) n1 += dish.nutr[c];
+        CHECK(dish.warm < 0.01f, "holding FEED warmed the agar (%.2f)", dish.warm);
+        CHECK(n1 > n0 + 1, "a slow press on FEED fed nothing");
+        while (dish_ui_take_sound(&ui, &pitch) >= 0) {}
+    }
     /* the pages open and close */
     tap_icon(ICON_CARD); CHECK(ui.page == PAGE_CARD, "CARD did not open the card");
     tap_at(DISH_CX, DISH_CY); CHECK(ui.page == PAGE_NONE, "a tap did not close the card");
@@ -248,6 +258,16 @@ static int selftest_pet(void) {
     CHECK(fabsf(back.strain[DISH_PET].vault.heat_opt - dish.strain[DISH_PET].vault.heat_opt) < 1e-6f, "the vault genome changed");
     CHECK(!dish_load(&back, buf, n - 1, 5), "a truncated save loaded");
     back.dna = 777; CHECK(!dish_load(&back, buf, n + 5, 5) && back.dna == 777, "a padded save loaded, or touched the dish");
+    {   /* each cell's age comes back (old age keeps working across power-offs) */
+        float age_a = 0, age_b = 0;
+        for (int i = 0; i < DISH_MAX_CELLS; i++) { if (dish.cell[i].state == CS_LIVE) age_a += (int)dish.cell[i].age; if (back.cell[i].state == CS_LIVE) age_b += back.cell[i].age; }
+        CHECK(fabsf(age_a - age_b) < 1, "the cells' ages did not survive the save (%.0f vs %.0f)", age_a, age_b);
+    }
+    {   /* a NaN in the save's pH is refused, not loaded into the world */
+        static uint8_t bad[DISH_SAVE_MAX]; memcpy(bad, buf, n);
+        float nan = NAN; memcpy(bad + 6 + 13, &nan, 4);          /* (header 6, then temp, clock, outbreak_t, light: the pH) */
+        CHECK(dish_load(&back, bad, n, 5) && back.ph == 0.5f, "a NaN pH loaded as %f", back.ph);
+    }
     buf[0] ^= 0xFF;
     CHECK(!dish_load(&back, buf, n, 5), "a corrupt save loaded");
     run(&dish, 1, 0, false);
@@ -360,6 +380,14 @@ static int selftest_evolve(void) {
     /* the samples join, once each */
     CHECK(dish_add_sample(&dish, SP_CYANO) >= 0, "the cyano sample did not join");
     CHECK(dish_add_sample(&dish, SP_CYANO) < 0, "a second cyano colony joined");
+    {   /* a sample that died out can be added again */
+        int cs = -1; for (int s2 = 0; s2 < DISH_MAX_STRAINS; s2++) if (dish.strain[s2].used && dish.strain[s2].species == SP_CYANO) cs = s2;
+        for (int i = 0; i < DISH_MAX_CELLS; i++) if (dish.cell[i].strain == cs && dish.cell[i].state != CS_FREE) dish.cell[i].state = CS_DYING;
+        run(&dish, 1, 0, false);
+        CHECK(dish_add_sample(&dish, SP_CYANO) == cs, "a cyano colony that died out could not come back");
+        run(&dish, 0.1f, 0, false);
+        CHECK(dish.strain[cs].count > 0 && dish.strain[cs].extinct_t == 0, "the reseeded cyano is not alive (%d)", dish.strain[cs].count);
+    }
     int cy = 0; for (int s = 0; s < DISH_MAX_STRAINS; s++) if (dish.strain[s].used && dish.strain[s].species == SP_CYANO) cy = s;
     int my = dish_add_sample(&dish, SP_MYXO);
     CHECK(my >= 0, "the myxo sample did not join");
@@ -433,6 +461,8 @@ static int selftest_prog(void) {
           "the save lost the progression");
     /* the first-run setup: pick the coccus, the second name, begin */
     dish_ui_begin_setup(&ui);
+    run(&dish, 8, 0, false);                          /* the demo dish lives behind the setup... */
+    CHECK(ui.toast_t <= 0, "a toast (\"%s\") showed over the setup", ui.toast);   /* ...without talking over it */
     dish_ui_hotspot(HS_DONE, &hx, &hy); tap_at(hx, hy);                 /* START */
     dish_ui_hotspot(HS_STARTER_1, &hx, &hy); tap_at(hx, hy);
     dish_ui_hotspot(HS_DONE, &hx, &hy); tap_at(hx, hy);                 /* NEXT */

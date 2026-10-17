@@ -1,0 +1,274 @@
+<title>Pocket Dish</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@500;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a lab bench at night - the board under a lamp on the left, its controls and notes on the right; one column on a phone.
+   One deliberate dark look (the dish is a dark-field microscope), so no light theme. */
+:root {
+  --bench: #070a12;        /* the page */
+  --panel: #0e1424;        /* the notes card */
+  --line: #233250;         /* rules, bezel edges */
+  --ink: #e1e9f7;          /* text */
+  --muted: #8a9cbd;        /* captions */
+  --glow: #7ff4ff;         /* the game's own cyan */
+  --food: #ffc870;         /* the game's food amber */
+  --bezel-a: #1b2233; --bezel-b: #05070c;
+  --display: "Pixelify Sans", "Courier New", monospace;
+  --body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  color-scheme: dark;
+}
+[hidden] { display: none !important; }
+html, body { background: var(--bench); color: var(--ink); }
+body { font-family: var(--body); font-size: 15px; line-height: 1.55; min-height: 100%; }
+.wrap {
+  max-width: 1120px; margin: 0 auto;
+  padding-block: 28px 48px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 36px; align-items: start;
+}
+@media (max-width: 860px) { .wrap { grid-template-columns: minmax(0, 1fr); gap: 24px; } }
+
+header { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 18px; }
+h1 { font-family: var(--display); font-weight: 700; font-size: clamp(30px, 5vw, 44px); letter-spacing: 0.02em; margin: 0;
+     color: var(--ink); text-shadow: 0 0 18px rgba(127, 244, 255, 0.35); }
+header p { margin: 0; color: var(--muted); max-width: 60ch; text-wrap: pretty; }
+
+/* the stage: the lamp's pool of light, the board on it */
+.stage { min-width: 0; display: grid; justify-items: center; gap: 16px;
+         background: radial-gradient(ellipse 60% 55% at 50% 45%, rgba(127, 244, 255, 0.07), transparent 70%); padding-block: 12px; }
+.board { position: relative; padding: 14px; background: linear-gradient(150deg, var(--bezel-a), var(--bezel-b));
+         box-shadow: 0 0 0 1px var(--line), 0 30px 60px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+         max-width: 100%; }
+.board canvas { display: block; width: 100%; height: auto; background: #000; touch-action: none; cursor: crosshair; }
+.board[data-shape="rect"] { border-radius: 34px; } .board[data-shape="rect"] canvas { border-radius: 22px; }
+.board[data-shape="round"] { border-radius: 50%; padding: 18px; background: radial-gradient(circle at 35% 30%, #c9d2e0, #5d6576 45%, #262b36); }
+.board[data-shape="round"] canvas { border-radius: 50%; }
+.board[data-shape="watch"] { border-radius: 92px; padding: 16px; } .board[data-shape="watch"] canvas { border-radius: 80px; }
+.board[data-shape="square"] { border-radius: 44px; padding: 20px; background: linear-gradient(150deg, #f2f4f7, #c9ced8); }
+.board[data-shape="square"] canvas { border-radius: 30px; }
+
+.boards { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
+.chip { font: 500 13px/1 var(--mono); color: var(--muted); background: transparent; border: 1px solid var(--line);
+        border-radius: 999px; padding: 9px 14px; cursor: pointer; }
+.chip:hover { color: var(--ink); border-color: #3a5078; }
+.chip[aria-pressed="true"] { color: #031015; background: var(--glow); border-color: var(--glow); }
+.chip:focus-visible, .btn:focus-visible { outline: 2px solid var(--food); outline-offset: 2px; }
+
+/* the notes card */
+aside { min-width: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 18px; padding: 20px; display: grid; gap: 20px; }
+aside h2 { font: 600 11px/1 var(--mono); letter-spacing: 0.12em; text-transform: uppercase; color: var(--muted); margin: 0 0 10px; }
+.row { display: flex; flex-wrap: wrap; gap: 8px; }
+.btn { font: 500 14px/1 var(--body); color: var(--ink); background: #16203a; border: 1px solid #2c3d63; border-radius: 10px;
+       padding: 10px 14px; cursor: pointer; }
+.btn:hover { background: #1c2948; }
+.btn.on { border-color: var(--glow); color: var(--glow); }
+.btn.warn { border-color: #6b3341; color: #ffb3c0; }
+dl { display: grid; grid-template-columns: auto 1fr; gap: 8px 14px; margin: 0; }
+dt { font: 500 12px/1.6 var(--mono); color: var(--glow); white-space: nowrap; }
+dd { margin: 0; color: var(--ink); }
+kbd { font: 500 12px/1 var(--mono); color: var(--food); border: 1px solid #4a3a1c; border-bottom-width: 2px; border-radius: 5px; padding: 3px 6px; }
+.keys { display: grid; gap: 8px; }
+.keys div { display: flex; align-items: center; gap: 10px; color: var(--ink); }
+.status { font: 400 12px/1.5 var(--mono); color: var(--muted); font-variant-numeric: tabular-nums; }
+.confirm { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: #ffb3c0; font-size: 14px; }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>Pocket Dish</h1>
+    <p>The petri-dish game from the dish branch, compiled from the same C code that runs on the boards. Your mouse or finger is the finger on the glass.</p>
+  </header>
+
+  <section class="stage" aria-label="The board">
+    <div class="board" id="board" data-shape="rect"><canvas id="screen" width="448" height="368" aria-label="The dish: tap to feed, drag to stir, hold to warm"></canvas></div>
+    <div class="boards" role="group" aria-label="Which board">
+      <button class="chip" id="b-rect" data-board="rect" aria-pressed="true">1.8 AMOLED</button>
+      <button class="chip" id="b-round" data-board="round" aria-pressed="false">Pendant 1.75</button>
+      <button class="chip" id="b-watch" data-board="watch" aria-pressed="false">Watch 2.06</button>
+      <button class="chip" id="b-square" data-board="square" aria-pressed="false">Square 2.16</button>
+    </div>
+    <div class="status" id="status">Loading the 1.8's dish...</div>
+  </section>
+
+  <aside>
+    <div>
+      <h2>Bench</h2>
+      <div class="row">
+        <button class="btn" id="sound">Sound off</button>
+        <button class="btn" id="fast">Time x1</button>
+        <button class="btn warn" id="reset">New dish</button>
+      </div>
+      <div class="confirm" id="confirm" hidden>
+        <span>Start over? This board's dish and its badges are wiped.</span>
+        <button class="btn warn" id="reset-yes">Wipe it</button>
+        <button class="btn" id="reset-no">Keep it</button>
+      </div>
+    </div>
+    <div>
+      <h2>On the glass</h2>
+      <dl>
+        <dt>Tap</dt><dd>Drop food, or tap a germ to look closer</dd>
+        <dt>Drag</dt><dd>Stir the dish</dd>
+        <dt>Hold</dt><dd>Warm the spot under your finger</dd>
+        <dt>Tap x3</dt><dd>Rap the glass: everyone scatters</dd>
+        <dt>Icons</dt><dd>Feed, lab, medicine, clean, zoom, card</dd>
+      </dl>
+    </div>
+    <div>
+      <h2>Bench keys</h2>
+      <div class="keys">
+        <div><kbd>N</kbd> Light on or off</div>
+        <div><kbd>O</kbd> A virus outbreak</div>
+        <div><kbd>F</kbd> Ten times faster</div>
+        <div><kbd>D</kbd> Fifty DNA, to try the lab's unlocks</div>
+      </div>
+    </div>
+    <p class="status">Each board keeps its own dish in this browser, and lives through the time you were away, just as a board does after a power-off.</p>
+  </aside>
+</div>
+
+<script>
+(() => {
+  const BOARDS = { rect: "1.8", round: "pendant", watch: "watch", square: "square" };
+  const NAMES = { rect: "1.8", round: "pendant", watch: "watch", square: "square" };
+  const canvas = document.getElementById("screen"), ctx = canvas.getContext("2d");
+  const boardEl = document.getElementById("board"), statusEl = document.getElementById("status");
+  const factories = {};
+  let M = null, board = null, img = null, rgba = null, last = 0, raf = 0, saveTimer = 0;
+
+  /* ---- storage: one save per board, with when it was written ---- */
+  const key = b => "pocketdish.save." + b;
+  function readSave(b) {
+    try { const v = JSON.parse(localStorage.getItem(key(b)) || "null"); return v && v.data ? v : null; } catch (e) { return null; }
+  }
+  function writeSave() {
+    if (!M) return;
+    try {
+      const n = M._web_save(); if (n <= 0) return;
+      const bytes = M.HEAPU8.subarray(M._web_save_buf(), M._web_save_buf() + n);
+      let s = ""; for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+      localStorage.setItem(key(board), JSON.stringify({ at: Date.now(), data: btoa(s) }));
+    } catch (e) { /* storage refused: the dish just doesn't persist */ }
+  }
+  function clearSave(b) { try { localStorage.removeItem(key(b)); } catch (e) {} }
+
+  /* ---- sound: the tank's bank, played at the dish's pitches ---- */
+  let actx = null, bank = null, soundOn = false;
+  const soundBtn = document.getElementById("sound");
+  async function enableSound() {
+    try {
+      actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+      await actx.resume();
+      if (!bank) bank = await actx.decodeAudioData(await (await fetch("sounds.wav")).arrayBuffer());   /* (offsets stay in 16 kHz samples) */
+      soundOn = true;
+    } catch (e) { soundOn = false; statusEl.textContent = "Sound could not start in this browser."; }
+    soundBtn.textContent = soundOn ? "Sound on" : "Sound off"; soundBtn.classList.toggle("on", soundOn);
+  }
+  soundBtn.addEventListener("click", () => {
+    if (soundOn) { soundOn = false; soundBtn.textContent = "Sound off"; soundBtn.classList.remove("on"); }
+    else enableSound();
+  });
+  function playSounds() {
+    for (let p; (p = M._web_sound()); ) {
+      if (!soundOn || !bank) continue;
+      const v = M.HEAP32.subarray(p >> 2, (p >> 2) + 4);
+      const src = actx.createBufferSource(), g = actx.createGain();
+      src.buffer = bank; src.playbackRate.value = v[2] / 256; g.gain.value = 0.8 * v[3] / 256;
+      src.connect(g).connect(actx.destination);
+      src.start(0, v[0] / 16000, v[1] / 16000);
+    }
+  }
+
+  /* ---- the frame: RGB565 out of the module, RGBA onto the canvas ---- */
+  function draw() {
+    const W = canvas.width, H = canvas.height;
+    const px = M.HEAPU16.subarray(M._web_fb() >> 1, (M._web_fb() >> 1) + W * H);
+    for (let i = 0, j = 0; i < px.length; i++, j += 4) {
+      const p = px[i];
+      rgba[j] = ((p >> 11) << 3) | (p >> 13); rgba[j + 1] = (((p >> 5) & 63) << 2) | ((p >> 9) & 3); rgba[j + 2] = ((p & 31) << 3) | ((p >> 2) & 7);
+    }
+    ctx.putImageData(img, 0, 0);
+  }
+  function loop(t) {
+    const dt = last ? Math.min(0.1, (t - last) / 1000) : 1 / 60; last = t;
+    M._web_frame(dt); draw(); playSounds();
+    raf = requestAnimationFrame(loop);
+  }
+
+  /* ---- the finger ---- */
+  let down = false;
+  function at(e) { const r = canvas.getBoundingClientRect(); return [(e.clientX - r.left) * canvas.width / r.width, (e.clientY - r.top) * canvas.height / r.height]; }
+  canvas.addEventListener("pointerdown", e => { if (!M) return; down = true; canvas.setPointerCapture(e.pointerId); const [x, y] = at(e); M._web_touch(x, y, 1); if (soundOn && actx) actx.resume(); });
+  canvas.addEventListener("pointermove", e => { if (M && down) { const [x, y] = at(e); M._web_touch(x, y, 1); } });
+  const up = e => { if (M && down) { down = false; const [x, y] = at(e); M._web_touch(x, y, 0); } };
+  canvas.addEventListener("pointerup", up); canvas.addEventListener("pointercancel", up);
+
+  /* ---- the keys ---- */
+  const fastBtn = document.getElementById("fast");
+  function syncFast() { const f = M && M._web_fast(); fastBtn.textContent = f ? "Time x10" : "Time x1"; fastBtn.classList.toggle("on", !!f); }
+  fastBtn.addEventListener("click", () => { if (M) { M._web_key(102); syncFast(); } });
+  document.addEventListener("keydown", e => {
+    if (!M || e.metaKey || e.ctrlKey || e.altKey) return;
+    const k = e.key.toLowerCase();
+    if ("nofd".includes(k) && k.length === 1) { M._web_key(k.charCodeAt(0)); if (k === "f") syncFast(); }
+  });
+
+  /* ---- a new dish, confirmed on the page ---- */
+  const confirmEl = document.getElementById("confirm");
+  document.getElementById("reset").addEventListener("click", () => { confirmEl.hidden = false; });
+  document.getElementById("reset-no").addEventListener("click", () => { confirmEl.hidden = true; });
+  document.getElementById("reset-yes").addEventListener("click", () => {
+    confirmEl.hidden = true; clearSave(board);
+    if (M) { M._web_reset((Math.random() * 4294967295) >>> 0); writeSave(); }
+  });
+
+  /* ---- the boards: one module each, loaded on first use ---- */
+  function loadScript(src) {
+    return new Promise((ok, fail) => { const s = document.createElement("script"); s.src = src; s.onload = ok; s.onerror = () => fail(new Error(src)); document.head.appendChild(s); });
+  }
+  async function factory(b) {
+    if (!factories[b]) { await loadScript("dish-" + b + ".js"); factories[b] = window.createDish; }
+    return factories[b];
+  }
+  async function start(b) {
+    if (b === board) return;
+    if (M) { writeSave(); cancelAnimationFrame(raf); }
+    statusEl.textContent = "Loading the " + NAMES[b] + "'s dish...";
+    document.querySelectorAll(".chip").forEach(c => c.setAttribute("aria-pressed", String(c.dataset.board === b)));
+    try {
+      const mod = await (await factory(b))();
+      M = mod; board = b;
+      const W = M._web_w(), H = M._web_h();
+      canvas.width = W; canvas.height = H; boardEl.dataset.shape = b;
+      boardEl.style.width = "min(100%, " + Math.round(W * 1.35 + 40) + "px)";
+      img = ctx.createImageData(W, H); rgba = img.data; for (let i = 3; i < rgba.length; i += 4) rgba[i] = 255;
+      const saved = readSave(b); let len = 0, away = 0;
+      if (saved) {
+        const bin = atob(saved.data), at = M._web_save_buf();
+        for (let i = 0; i < bin.length; i++) M.HEAPU8[at + i] = bin.charCodeAt(i);
+        len = bin.length; away = Math.max(0, (Date.now() - saved.at) / 1000);
+      }
+      M._web_init((Math.random() * 4294967295) >>> 0, len, away);
+      syncFast();
+      statusEl.textContent = saved ? "The " + NAMES[b] + "'s dish, back after " + fmtAway(away) + " away." : "A new dish on the " + NAMES[b] + ": the setup is on the glass.";
+      try { localStorage.setItem("pocketdish.board", b); } catch (e) {}
+      last = 0; raf = requestAnimationFrame(loop);
+    } catch (e) {
+      statusEl.textContent = "The " + NAMES[b] + "'s module would not load (" + e.message + "). Serve this folder over http, not as a file.";
+    }
+  }
+  function fmtAway(s) { return s < 90 ? Math.round(s) + " s" : s < 5400 ? Math.round(s / 60) + " min" : (s / 3600).toFixed(1) + " h"; }
+  document.querySelectorAll(".chip").forEach(c => c.addEventListener("click", () => start(c.dataset.board)));
+
+  clearInterval(saveTimer); saveTimer = setInterval(writeSave, 15000);
+  document.addEventListener("visibilitychange", () => { if (document.hidden) writeSave(); });
+  window.addEventListener("pagehide", writeSave);
+  let first = "rect"; try { first = localStorage.getItem("pocketdish.board") || "rect"; } catch (e) {}
+  if (!BOARDS[first]) first = "rect";
+  start(first);
+})();
+</script>

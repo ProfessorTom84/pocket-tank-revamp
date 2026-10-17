@@ -110,6 +110,7 @@ int dish_ui_take_sound(dish_ui_t *u, int *pitch) {
     return cue;
 }
 void dish_ui_toast(dish_ui_t *u, const char *s, float seconds) {
+    if (u->setup) return;                         /* nothing over the first-run setup: the dish behind it is only a demo */
     snprintf(u->toast, sizeof u->toast, "%s", s);
     u->toast_t = seconds;
 }
@@ -164,6 +165,7 @@ static icon_t icon_for_need(int n) {
     switch (n) { case NEED_FOOD: return ICON_FEED; case NEED_COMFORT: return ICON_LAB; case NEED_HEALTH: return ICON_MEDS; default: return ICON_CLEAN; }
 }
 
+static int icon_hit(float x, float y);
 void dish_ui_tick(dish_ui_t *u, dish_t *d, float dt) {
     u->clock += dt;
     for (int k = 0; k < 32; k++) if (u->snd_cd[k] > 0) u->snd_cd[k] -= dt;
@@ -188,19 +190,20 @@ void dish_ui_tick(dish_ui_t *u, dish_t *d, float dt) {
     if (pet->extinct_t <= 0) u->extinct_show = 0;
     /* the pet asks for things: an emote over the colony now and then */
     if (u->emote_t > 0) u->emote_t -= dt;
-    else if ((u->heart_t -= dt) <= 0 && pet->count > 0) {     /* (heart_t: the cooldown between emotes) */
+    else if ((u->emote_cd -= dt) <= 0 && pet->count > 0) {
         int w = worst_need(u);
-        if (u->needs[w] < 0.35f) { u->emote = w; u->emote_t = 3; u->heart_t = 6; }
-        else if (u->mood > 0.75f) { u->emote = NEED_COUNT; u->emote_t = 2.5f; u->heart_t = 14; }   /* hearts */
-        else u->heart_t = 2;
+        if (u->needs[w] < 0.35f) { u->emote = w; u->emote_t = 3; u->emote_cd = 6; }
+        else if (u->mood > 0.75f) { u->emote = NEED_COUNT; u->emote_t = 2.5f; u->emote_cd = 14; }   /* hearts */
+        else u->emote_cd = 2;
     }
     /* the lens follows its cell, and closes when the cell is gone */
     if (u->lens >= 0) {
         const cell_t *c = &d->cell[u->lens];
-        if ((c->state != CS_LIVE && c->state != CS_SPORE) || c->gen != u->lens_gen) u->lens = -1;
+        if ((c->state != CS_LIVE && c->state != CS_SPORE) || c->id != u->lens_id) u->lens = -1;
     }
     /* a held finger warms the agar under it */
-    if (u->down && !u->dragged && u->page == PAGE_NONE && !u->setup && u->tool == TOOL_NONE) {
+    /* a held finger warms the agar - when it came down on the agar, not on an icon or past the glass */
+    if (u->down && !u->dragged && u->page == PAGE_NONE && !u->setup && u->tool == TOOL_NONE && icon_hit(u->dx0, u->dy0) < 0 && dish_inside(u->dx0, u->dy0, 4)) {
         u->down_t += dt; u->still_t += dt;
         if (u->down_t > 0.6f) { u->warmed = true; dish_warm(d, u->lx, u->ly, dt); }
     }
@@ -228,7 +231,7 @@ static int pet_cell_near(const dish_t *d, float x, float y) {
 }
 static void open_lens(dish_ui_t *u, const dish_t *d, int cell) {
     if (cell < 0) return;
-    u->lens = cell; u->lens_gen = d->cell[cell].gen;
+    u->lens = cell; u->lens_id = d->cell[cell].id;
 }
 static void icon_press(dish_ui_t *u, dish_t *d, int i) {
     const strain_t *pet = &d->strain[DISH_PET];
@@ -708,7 +711,7 @@ static void draw_samples(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int 
     for (int k = 0; k < 3; k++) {
         rect_t r = sample_row(k);
         bool here = false;
-        for (int s = 0; s < DISH_MAX_STRAINS; s++) if (d->strain[s].used && d->strain[s].species == SAMPLES[k]) here = true;
+        for (int s = 0; s < DISH_MAX_STRAINS; s++) if (d->strain[s].used && d->strain[s].species == SAMPLES[k] && d->strain[s].count > 0) here = true;   /* (one that died out can come back) */
         genome_t g = dish_species_genome(SAMPLES[k]);
         button(fb, st, r, here ? 0x0C1424 : 0x102A3A, here ? 0x2A3A50 : dr_hsv(g.hue, 0.5f, 0.9f), NULL, 2);
         dr_disc(fb, st, r.x + 28, r.y + r.h * 0.5f, 20, 0x03050A, 255);

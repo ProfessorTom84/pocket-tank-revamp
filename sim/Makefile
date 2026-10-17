@@ -93,6 +93,27 @@ dish-check-all:
 	$(MAKE) SQUARE=1 dish-check
 .PHONY: dish dish-check dish-check-all
 
+# ---- Pocket Dish in a browser (Emscripten): `make web` -> web-dist/, `make web-serve` opens it on localhost ----
+# One WebAssembly module per glass (the shape is compiled in, as on the boards), the page, and the sound bank.
+WEB_SRCS := web_main.c ../common/dish.c ../common/dish_brain.c ../common/dish_render.c ../common/dish_ui.c ../common/dish_prog.c ../common/sounds.c
+WEB_FLAGS := -O2 -std=c11 -I../common -sMODULARIZE=1 -sEXPORT_NAME=createDish -sENVIRONMENT=web -sFILESYSTEM=0 \
+             -sINITIAL_MEMORY=16MB -sEXPORTED_RUNTIME_METHODS=HEAPU8,HEAPU16,HEAP32 \
+             -sEXPORTED_FUNCTIONS=_web_w,_web_h,_web_fb,_web_save_buf,_web_init,_web_frame,_web_touch,_web_save,_web_sound,_web_key,_web_fast,_web_reset
+web: $(WEB_SRCS) $(wildcard ../common/dish*.h) web/index.html
+	@mkdir -p web-dist
+	emcc $(WEB_FLAGS) -o web-dist/dish-rect.js $(WEB_SRCS)
+	emcc $(WEB_FLAGS) -DTANK_ROUND -o web-dist/dish-round.js $(WEB_SRCS)
+	emcc $(WEB_FLAGS) -DTANK_WATCH -o web-dist/dish-watch.js $(WEB_SRCS)
+	emcc $(WEB_FLAGS) -DTANK_SQUARE -o web-dist/dish-square.js $(WEB_SRCS)
+	@# the bank as a WAV (16 kHz mono s16, as it is): a type browsers decode and artifact hosts serve
+	python3 -c "import wave,sys; w=wave.open('web-dist/sounds.wav','wb'); w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000); w.writeframes(open('../assets/sounds/sounds.bin','rb').read()); w.close()"
+	@# the page is written for the artifact host, which adds the document around it; locally it gets that here
+	@{ printf '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">\n'; cat web/index.html; printf '\n</html>\n'; } > web-dist/index.html
+	@echo "built web-dist/ - run: make web-serve, then open http://localhost:8642"
+web-serve: web
+	cd web-dist && python3 -m http.server 8642
+.PHONY: web web-serve
+
 $(BUILD)/common/llm/%.o: ../common/llm/%.c
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -O3 -c $< -o $@

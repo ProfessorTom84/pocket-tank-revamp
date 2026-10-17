@@ -204,6 +204,11 @@ void app_main(void) {
     if (heap_caps_get_free_size(MALLOC_CAP_INTERNAL) > sizeof(dish_t) + 96 * 1024)
         dish = heap_caps_calloc(1, sizeof(dish_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     if (!dish) dish = heap_caps_calloc(1, sizeof(dish_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!dish) {                                /* no room for the world at all: say so, rather than crash in a loop */
+        ESP_LOGE(TAG, "no memory for the dish (%u B): internal %u KB, PSRAM %u KB free - stopping", (unsigned)sizeof(dish_t),
+                 (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024, (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM) / 1024);
+        return;
+    }
     dish_ui_init(&ui);
     dish_events_set(on_event, NULL);
     if (!load_dish()) {
