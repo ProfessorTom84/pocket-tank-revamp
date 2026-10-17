@@ -1,0 +1,496 @@
+/* dish_ui.c — the pet layer: see dish_ui.h. */
+#include "dish_ui.h"
+#include "dish_render.h"
+#include <math.h>
+#include <stdio.h>
+#include <string.h>
+
+#define TAU 6.2831853f
+const char *const NEED_NAMES[NEED_COUNT] = { "FOOD", "COMFORT", "SPACE", "CLEAN", "HEALTH" };
+static const char *const DOING[ST_COUNT] = { "LOOKING FOR FOOD", "HUDDLING TOGETHER", "SPLITTING IN TWO", "ON THE HUNT",
+                                             "HIDING", "RESTING", "TURNING TO SPORES", "SPREADING OUT" };
+
+static float clampf(float v, float lo, float hi) { return v < lo ? lo : v > hi ? hi : v; }
+static float hypot2(float x, float y) { return sqrtf(x * x + y * y); }
+
+/* ---- layout ---- */
+void dish_ui_icon_pos(icon_t i, float *x, float *y) {
+    /* the icons sit on an arc just inside the rim, along the bottom of the dish */
+    float rx = DISH_RX - 32, ry = DISH_RY - 32, step = (2 * DISH_ICON_R + 8) / rx;
+    float a = 1.5708f - (i - (ICON_COUNT - 1) * 0.5f) * step;   /* FEED on the left */
+    *x = DISH_CX + cosf(a) * rx; *y = DISH_CY + sinf(a) * ry;
+}
+#define PW (DISH_W - 48 < 340 ? DISH_W - 48 : 340)
+#define PH (DISH_H - 80 < 272 ? DISH_H - 80 : 272)
+#define PX ((int)(DISH_CX - PW / 2))
+#define PY ((int)(DISH_CY - PH / 2))
+typedef struct { int x, y, w, h; } rect_t;
+static bool in_rect(rect_t r, float x, float y) { return x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h; }
+/* the lab: HEAT - +, LIGHT, DONE */
+static rect_t lab_minus(void) { return (rect_t){ PX + 20, PY + 70, 44, 40 }; }
+static rect_t lab_plus(void)  { return (rect_t){ PX + PW - 64, PY + 70, 44, 40 }; }
+static rect_t lab_light(void) { return (rect_t){ PX + 20, PY + 140, PW - 40, 44 }; }
+static rect_t page_done(void) { return (rect_t){ (int)DISH_CX - 60, PY + PH - 54, 120, 40 }; }
+/* medicine: the two cures */
+static rect_t meds_drug(void)  { return (rect_t){ PX + 20, PY + 58, PW - 40, 66 }; }
+static rect_t meds_virus(void) { return (rect_t){ PX + 20, PY + 134, PW - 40, 66 }; }
+/* a tool in hand: the DONE chip at the top */
+static rect_t tool_chip(void) { return (rect_t){ (int)DISH_CX - 70, (int)(DISH_CY - DISH_RY + 34), 140, 32 }; }
+void dish_ui_hotspot(hotspot_t h, float *x, float *y) {
+    rect_t r;
+    switch (h) {
+    case HS_LAB_MINUS: r = lab_minus(); break;   case HS_LAB_PLUS: r = lab_plus(); break;
+    case HS_LAB_LIGHT: r = lab_light(); break;   case HS_DONE: r = page_done(); break;
+    case HS_MEDS_DRUG: r = meds_drug(); break;   case HS_MEDS_VIRUS: r = meds_virus(); break;
+    default: r = tool_chip(); break;
+    }
+    *x = r.x + r.w * 0.5f; *y = r.y + r.h * 0.5f;
+}
+/* the microscope: opposite the cell it watches */
+static void lens_geom(const dish_t *d, int cell, float *cx, float *cy, float *r) {
+    *r = fminf(DISH_W, DISH_H) * 0.24f;
+    float x = cell >= 0 ? d->cell[cell].x : DISH_CX;
+    *cx = x < DISH_CX ? DISH_CX + DISH_RX * 0.42f : DISH_CX - DISH_RX * 0.42f;
+    *cy = DISH_CY - DISH_RY * 0.22f;
+}
+
+/* ---- state ---- */
+void dish_ui_init(dish_ui_t *u) {
+    memset(u, 0, sizeof *u);
+    for (int i = 0; i < NEED_COUNT; i++) u->needs[i] = 0.8f;
+    u->mood = 0.8f; u->lens = -1; u->lens_zoom = 5;
+}
+void dish_ui_toast(dish_ui_t *u, const char *s, float seconds) {
+    snprintf(u->toast, sizeof u->toast, "%s", s);
+    u->toast_t = seconds;
+}
+void dish_ui_event(dish_ui_t *u, const dish_t *d, int ev, int strain) {
+    const strain_t *pet = &d->strain[DISH_PET];
+    char b[40];
+    switch (ev) {
+    case DEV_EXTINCT: u->extinct_show = 1; u->lens = -1; u->page = PAGE_NONE; break;
+    case DEV_RESPAWN: u->extinct_show = 0; u->back_show = 3.5f; snprintf(b, sizeof b, "%s IS BACK!", pet->name); dish_ui_toast(u, b, 3.5f); break;
+    case DEV_OUTBREAK: dish_ui_toast(u, "VIRUSES ARE COMING!", 4); break;
+    case DEV_INFECT:
+        if (strain == DISH_PET && u->toast_t <= 0) { snprintf(b, sizeof b, "%s CAUGHT A VIRUS", pet->name); dish_ui_toast(u, b, 3); }
+        break;
+    case DEV_STRAT:
+        if (u->toast_t <= 0 && pet->count) { snprintf(b, sizeof b, "%s", DOING[pet->strat.id]); dish_ui_toast(u, b, 2.5f); }
+        break;
+    case DEV_DIVIDE:
+        if (strain == DISH_PET && (pet->births == 1 || pet->births % 25 == 0) && u->toast_t <= 0) {
+            snprintf(b, sizeof b, pet->births == 1 ? "%s SPLIT IN TWO!" : "%s IS GROWING!", pet->name); dish_ui_toast(u, b, 3);
+        }
+        break;
+    }
+}
+
+static void need_targets(const dish_t *d, float *t) {
+    const strain_t *st = &d->strain[DISH_PET];
+    t[NEED_FOOD] = clampf((st->energy - 0.2f) / 0.55f, 0, 1);
+    t[NEED_COMFORT] = st->comfort;
+    t[NEED_SPACE] = 1 - st->crowd;
+    t[NEED_CLEAN] = 1 - clampf(st->filth * 2.2f, 0, 1);
+    t[NEED_HEALTH] = st->health * (1 - st->infected);
+}
+static int worst_need(const dish_ui_t *u) {
+    int w = 0;
+    for (int i = 1; i < NEED_COUNT; i++) if (u->needs[i] < u->needs[w]) w = i;
+    return w;
+}
+static icon_t icon_for_need(int n) {
+    switch (n) { case NEED_FOOD: return ICON_FEED; case NEED_COMFORT: return ICON_LAB; case NEED_HEALTH: return ICON_MEDS; default: return ICON_CLEAN; }
+}
+
+void dish_ui_tick(dish_ui_t *u, dish_t *d, float dt) {
+    u->clock += dt;
+    const strain_t *pet = &d->strain[DISH_PET];
+    if (pet->count > 0) {
+        float t[NEED_COUNT]; need_targets(d, t);
+        float mn = 1, sum = 0;
+        for (int i = 0; i < NEED_COUNT; i++) {
+            u->needs[i] += (t[i] - u->needs[i]) * clampf(dt * 1.5f, 0, 1);
+            mn = fminf(mn, u->needs[i]); sum += u->needs[i];
+        }
+        u->mood = 0.5f * mn + 0.5f * sum / NEED_COUNT;
+    }
+    dish_render_mood = u->mood;
+    if (u->toast_t > 0) u->toast_t -= dt;
+    if (u->back_show > 0) u->back_show -= dt;
+    if (pet->extinct_t <= 0) u->extinct_show = 0;
+    /* the pet asks for things: an emote over the colony now and then */
+    if (u->emote_t > 0) u->emote_t -= dt;
+    else if ((u->heart_t -= dt) <= 0 && pet->count > 0) {     /* (heart_t: the cooldown between emotes) */
+        int w = worst_need(u);
+        if (u->needs[w] < 0.35f) { u->emote = w; u->emote_t = 3; u->heart_t = 6; }
+        else if (u->mood > 0.75f) { u->emote = NEED_COUNT; u->emote_t = 2.5f; u->heart_t = 14; }   /* hearts */
+        else u->heart_t = 2;
+    }
+    /* the lens follows its cell, and closes when the cell is gone */
+    if (u->lens >= 0) {
+        const cell_t *c = &d->cell[u->lens];
+        if ((c->state != CS_LIVE && c->state != CS_SPORE) || c->gen != u->lens_gen) u->lens = -1;
+    }
+    /* a held finger warms the agar under it */
+    if (u->down && !u->dragged && u->page == PAGE_NONE && u->tool == TOOL_NONE) {
+        u->down_t += dt; u->still_t += dt;
+        if (u->down_t > 0.6f) { u->warmed = true; dish_warm(d, u->lx, u->ly, dt); }
+    }
+    if (u->tool != TOOL_NONE && (u->tool_idle += dt) > 20) u->tool = TOOL_NONE;
+    for (int k = 0; k < 3; k++) u->tap_t[k] += dt;
+}
+
+/* ---- touch ---- */
+static int icon_hit(float x, float y) {
+    for (int i = 0; i < ICON_COUNT; i++) {
+        float ix, iy; dish_ui_icon_pos((icon_t)i, &ix, &iy);
+        if (hypot2(x - ix, y - iy) < DISH_ICON_R + 4) return i;
+    }
+    return -1;
+}
+static int pet_cell_near(const dish_t *d, float x, float y) {
+    int best = -1; float bd = 1e9f;
+    for (int i = 0; i < DISH_MAX_CELLS; i++) {
+        const cell_t *c = &d->cell[i];
+        if (c->strain != DISH_PET || (c->state != CS_LIVE && c->state != CS_SPORE)) continue;
+        float dd = hypot2(c->x - x, c->y - y);
+        if (dd < bd) { bd = dd; best = i; }
+    }
+    return best;
+}
+static void open_lens(dish_ui_t *u, const dish_t *d, int cell) {
+    if (cell < 0) return;
+    u->lens = cell; u->lens_gen = d->cell[cell].gen;
+}
+static void icon_press(dish_ui_t *u, dish_t *d, int i) {
+    const strain_t *pet = &d->strain[DISH_PET];
+    switch (i) {
+    case ICON_FEED: {
+        float x = pet->count ? pet->cx : DISH_CX, y = pet->count ? pet->cy : DISH_CY;
+        for (int k = 0; k < 3; k++) {
+            float a = k * TAU / 3 + u->clock;
+            dish_feed(d, x + cosf(a) * 18, y + sinf(a) * 18, 0.45f);
+        }
+        break; }
+    case ICON_LAB:   u->page = PAGE_LAB; break;
+    case ICON_MEDS:  u->page = PAGE_MEDS; break;
+    case ICON_CLEAN: u->tool = u->tool == TOOL_WIPE ? TOOL_NONE : TOOL_WIPE; u->tool_idle = 0; break;
+    case ICON_ZOOM:
+        if (u->lens >= 0) u->lens = -1;
+        else open_lens(u, d, pet_cell_near(d, pet->cx, pet->cy));
+        break;
+    case ICON_CARD:  u->page = PAGE_CARD; break;
+    }
+}
+static void page_tap(dish_ui_t *u, dish_t *d, float x, float y) {
+    switch (u->page) {
+    case PAGE_LAB:
+        if (in_rect(lab_minus(), x, y)) d->temp = clampf(d->temp - 0.05f, 0.05f, 0.95f);
+        else if (in_rect(lab_plus(), x, y)) d->temp = clampf(d->temp + 0.05f, 0.05f, 0.95f);
+        else if (in_rect(lab_light(), x, y)) d->light = !d->light;
+        else if (in_rect(page_done(), x, y)) u->page = PAGE_NONE;
+        break;
+    case PAGE_MEDS:
+        if (in_rect(meds_drug(), x, y)) { u->page = PAGE_NONE; u->tool = TOOL_DRUG; u->tool_idle = 0; dish_ui_toast(u, "CAREFUL: IT KILLS GOOD GERMS TOO", 3.5f); }
+        else if (in_rect(meds_virus(), x, y)) { u->page = PAGE_NONE; dish_antiviral(d); dish_ui_toast(u, "THE VIRUSES ARE GONE", 3); }
+        else if (in_rect(page_done(), x, y)) u->page = PAGE_NONE;
+        break;
+    default: u->page = PAGE_NONE;                    /* the card: a tap anywhere closes it */
+    }
+}
+static void tap(dish_ui_t *u, dish_t *d, float x, float y) {
+    if (u->page != PAGE_NONE) { page_tap(u, d, x, y); return; }
+    int ic = icon_hit(x, y);
+    if (ic >= 0) { icon_press(u, d, ic); return; }
+    if (u->tool != TOOL_NONE && in_rect(tool_chip(), x, y)) { u->tool = TOOL_NONE; return; }
+    if (u->lens >= 0) {                              /* a tap on the lens puts it away */
+        float lx, ly, lr; lens_geom(d, u->lens, &lx, &ly, &lr);
+        if (hypot2(x - lx, y - ly) < lr) { u->lens = -1; return; }
+    }
+    if (!dish_inside(x, y, 4)) return;
+    u->tool_idle = 0;
+    switch (u->tool) {
+    case TOOL_DRUG: dish_dose(d, x, y, 0.7f); return;
+    case TOOL_WIPE: dish_wipe(d, x, y, 24); return;
+    default: break;
+    }
+    /* three quick raps on the glass scatter everyone */
+    u->tap_t[2] = u->tap_t[1]; u->tap_t[1] = u->tap_t[0]; u->tap_t[0] = 0;
+    if (u->tap_t[2] < 0.8f) { dish_rap(d, x, y); dish_ui_toast(u, "EEK!", 1.5f); u->tap_t[1] = u->tap_t[2] = 9; return; }
+    int c = dish_cell_at(d, x, y, 5);
+    if (c >= 0) { open_lens(u, d, c); return; }
+    dish_feed(d, x, y, 0.6f);
+}
+void dish_ui_touch(dish_ui_t *u, dish_t *d, float x, float y, bool down) {
+    if (down && !u->down) {
+        u->down = true; u->dx0 = u->lx = x; u->dy0 = u->ly = y;
+        u->down_t = u->still_t = 0; u->dragged = u->warmed = false;
+        return;
+    }
+    if (down) {
+        if (hypot2(x - u->dx0, y - u->dy0) > 10) u->dragged = true;
+        if (u->dragged && u->page == PAGE_NONE && icon_hit(u->dx0, u->dy0) < 0) {
+            if (u->tool == TOOL_WIPE) { dish_wipe(d, x, y, 22); u->tool_idle = 0; }
+            else if (u->tool == TOOL_NONE) dish_stir(d, x, y, x - u->lx, y - u->ly);
+        }
+        u->lx = x; u->ly = y;
+        return;
+    }
+    if (!u->down) return;
+    u->down = false;
+    if (!u->dragged && !u->warmed) tap(u, d, x, y);
+}
+
+/* ---- drawing ---- */
+static void icon_glyph(uint16_t *fb, int st, int kind, float x, float y, float s, float a) {
+    int A = (int)(255 * a);
+    switch (kind) {
+    case ICON_FEED:          /* a pipette and its drop */
+        dr_line(fb, st, x - s * 0.42f, y - s * 0.5f, x + s * 0.12f, y + s * 0.12f, s * 0.24f, 0xD8E6F5, A);
+        dr_disc(fb, st, x - s * 0.44f, y - s * 0.52f, s * 0.2f, 0xFF7A8A, A);
+        dr_line(fb, st, x + s * 0.12f, y + s * 0.12f, x + s * 0.24f, y + s * 0.24f, s * 0.1f, 0xD8E6F5, A);
+        dr_glow(fb, st, x + s * 0.36f, y + s * 0.44f, s * 0.38f, 0xFFB040, (int)(A * 0.7f));
+        dr_disc(fb, st, x + s * 0.36f, y + s * 0.44f, s * 0.15f, 0xFFD27A, A);
+        break;
+    case ICON_LAB:           /* a flask with something green in it */
+        dr_line(fb, st, x - s * 0.13f, y - s * 0.55f, x - s * 0.13f, y - s * 0.12f, s * 0.08f, 0xD8E6F5, A);
+        dr_line(fb, st, x + s * 0.13f, y - s * 0.55f, x + s * 0.13f, y - s * 0.12f, s * 0.08f, 0xD8E6F5, A);
+        dr_line(fb, st, x - s * 0.13f, y - s * 0.12f, x - s * 0.45f, y + s * 0.48f, s * 0.08f, 0xD8E6F5, A);
+        dr_line(fb, st, x + s * 0.13f, y - s * 0.12f, x + s * 0.45f, y + s * 0.48f, s * 0.08f, 0xD8E6F5, A);
+        dr_line(fb, st, x - s * 0.45f, y + s * 0.48f, x + s * 0.45f, y + s * 0.48f, s * 0.08f, 0xD8E6F5, A);
+        for (int k = 0; k < 4; k++) { float yy = y + s * (0.18f + k * 0.08f), hw = s * (0.26f + k * 0.045f); dr_line(fb, st, x - hw, yy, x + hw, yy, s * 0.07f, 0x5CF08A, (int)(A * 0.85f)); }
+        dr_glow(fb, st, x, y + s * 0.3f, s * 0.5f, 0x2EE070, (int)(A * 0.45f));
+        dr_disc(fb, st, x + s * 0.08f, y - s * 0.28f, s * 0.06f, 0xBFFFD0, A);
+        break;
+    case ICON_MEDS:          /* a capsule */
+        dr_line(fb, st, x - s * 0.34f, y + s * 0.34f, x, y, s * 0.42f, 0xFF5470, A);
+        dr_line(fb, st, x, y, x + s * 0.34f, y - s * 0.34f, s * 0.42f, 0xF2F4FF, A);
+        dr_glow(fb, st, x - s * 0.2f, y - s * 0.05f, s * 0.12f, 0xFFFFFF, (int)(A * 0.6f));
+        break;
+    case ICON_CLEAN:         /* a sponge, sparkling */
+        dr_round_rect(fb, st, (int)(x - s * 0.5f), (int)(y - s * 0.32f), (int)(s * 1.0f), (int)(s * 0.66f), (int)(s * 0.16f), 0xFFD23C, A);
+        dr_disc(fb, st, x - s * 0.22f, y - s * 0.06f, s * 0.08f, 0xA07810, A);
+        dr_disc(fb, st, x + s * 0.12f, y + s * 0.1f, s * 0.07f, 0xA07810, A);
+        dr_disc(fb, st, x + s * 0.28f, y - s * 0.14f, s * 0.06f, 0xA07810, A);
+        dr_glow(fb, st, x + s * 0.5f, y - s * 0.52f, s * 0.22f, 0xFFFFFF, A);
+        break;
+    case ICON_ZOOM:          /* a magnifier */
+        dr_ring(fb, st, x - s * 0.1f, y - s * 0.1f, s * 0.3f, s * 0.08f, 0xD8E6F5, A);
+        dr_glow(fb, st, x - s * 0.1f, y - s * 0.1f, s * 0.26f, 0x6FE0FF, (int)(A * 0.5f));
+        dr_line(fb, st, x + s * 0.13f, y + s * 0.13f, x + s * 0.45f, y + s * 0.45f, s * 0.18f, 0xD8E6F5, A);
+        break;
+    case ICON_CARD: {        /* a little cell's face */
+        dr_glow(fb, st, x, y, s * 0.62f, 0x3FE0D0, (int)(A * 0.5f));
+        dr_ring(fb, st, x, y, s * 0.42f, s * 0.07f, 0xA8FFF4, A);
+        dr_disc(fb, st, x - s * 0.15f, y - s * 0.06f, s * 0.08f, 0x06060A, A);
+        dr_disc(fb, st, x + s * 0.15f, y - s * 0.06f, s * 0.08f, 0x06060A, A);
+        dr_line(fb, st, x - s * 0.12f, y + s * 0.14f, x, y + s * 0.2f, s * 0.05f, 0x06060A, A);
+        dr_line(fb, st, x, y + s * 0.2f, x + s * 0.12f, y + s * 0.14f, s * 0.05f, 0x06060A, A);
+        break; }
+    }
+}
+static void draw_icon(uint16_t *fb, int st, int kind, float x, float y, bool active, float alert, float clock) {
+    float s = DISH_ICON_R;
+    dr_disc(fb, st, x, y, s, 0x060A16, 190);
+    if (alert > 0) {
+        float p = 0.5f + 0.5f * sinf(clock * 6);
+        dr_glow(fb, st, x, y, s * 1.7f, 0xFFA030, (int)(140 * alert * p));
+        dr_ring(fb, st, x, y, s + 2, 1.8f, 0xFFB648, (int)(255 * alert * (0.5f + 0.5f * p)));
+    }
+    dr_ring(fb, st, x, y, s - 0.5f, 1.2f, active ? 0x7FF4FF : 0x5C7598, active ? 255 : 170);
+    if (active) dr_glow(fb, st, x, y, s * 1.4f, 0x3FD8FF, 90);
+    dr_glow(fb, st, x - s * 0.45f, y - s * 0.5f, s * 0.45f, 0xFFFFFF, 40);
+    icon_glyph(fb, st, kind, x, y, s * 1.05f, 1);
+}
+static void panel(uint16_t *fb, int st, int x, int y, int w, int h) {
+    dr_rect(fb, st, 0, 0, DISH_W, DISH_H, 0x000000, 110);
+    dr_round_rect(fb, st, x - 2, y - 2, w + 4, h + 4, 18, 0x3C6AA0, 255);
+    dr_round_rect(fb, st, x, y, w, h, 16, 0x0A1224, 245);
+    for (int k = 0; k < 3; k++) dr_glow(fb, st, x + w * (0.25f + k * 0.25f), y + 2, 30, 0x5FA8FF, 25);
+}
+static void text_c(uint16_t *fb, int st, float cx, int y, int sc, uint32_t rgb, const char *s) { dr_text(fb, st, (int)(cx - dr_text_w(s, sc) * 0.5f), y, sc, rgb, s); }
+static void button(uint16_t *fb, int st, rect_t r, uint32_t fill, uint32_t edge, const char *label, int sc) {
+    dr_round_rect(fb, st, r.x - 1, r.y - 1, r.w + 2, r.h + 2, 12, edge, 255);
+    dr_round_rect(fb, st, r.x + 1, r.y + 1, r.w - 2, r.h - 2, 11, fill, 255);
+    if (label) text_c(fb, st, r.x + r.w * 0.5f, r.y + (r.h - 7 * sc) / 2, sc, 0xEAF4FF, label);
+}
+static uint32_t need_color(float v) { return v > 0.6f ? 0x4CF08C : v > 0.3f ? 0xFFC23C : 0xFF4E5E; }
+static void bar(uint16_t *fb, int st, int x, int y, int w, int h, float v, uint32_t col) {
+    dr_round_rect(fb, st, x, y, w, h, h / 2, 0x1A2438, 255);
+    int fw = (int)(w * clampf(v, 0, 1));
+    if (fw >= h) { dr_round_rect(fb, st, x, y, fw, h, h / 2, col, 255); dr_glow(fb, st, x + fw - h * 0.5f, y + h * 0.5f, h * 1.2f, col, 90); }
+    dr_rect(fb, st, x + h / 2, y + 1, w - h, 1, 0xFFFFFF, 30);
+}
+
+static void draw_card(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int st) {
+    const strain_t *pet = &d->strain[DISH_PET];
+    panel(fb, st, PX, PY, PW, PH);
+    dr_text(fb, st, PX + 18, PY + 16, 3, 0xFFFFFF, pet->name);
+    char b[48];
+    snprintf(b, sizeof b, "A %s STRAIN", SPECIES_NAMES[pet->species]);
+    dr_text(fb, st, PX + 18, PY + 42, 1, 0x8FB0D8, b);
+    /* the portrait: the healthiest cell's genome, alive under glass */
+    float px = PX + 66, py = PY + 110;
+    dr_disc(fb, st, px, py, 46, 0x03050A, 255);
+    dr_glow(fb, st, px, py, 50, 0x2B5C90, 60);
+    dr_ring(fb, st, px, py, 46, 1.6f, 0x7FA8D8, 220);
+    dr_cell_icon(fb, st, (species_t)pet->species, &pet->vault, px, py, 4.2f, sinf(u->clock * 0.5f) * 0.4f, u->clock, true, 45);
+    /* the needs */
+    int nx = PX + 132, nw = PX + PW - 18 - (nx + 92);
+    for (int i = 0; i < NEED_COUNT; i++) {
+        int y = PY + 62 + i * 24;
+        dr_text(fb, st, nx, y, 2, 0xC8D8F0, NEED_NAMES[i]);
+        bar(fb, st, nx + 92, y + 1, nw, 12, u->needs[i], need_color(u->needs[i]));
+    }
+    /* what it inherited: the vault genome's traits */
+    const genome_t *g = &pet->vault;
+    const char *tn[4] = { "SPEED", "SIZE", "HEAT", "SHIELD" };
+    float tv[4] = { (g->speed - 0.5f) / 1.1f, (g->size - 0.75f) / 0.6f, g->heat_opt, fmaxf(g->drug_res, g->phage_res) };
+    for (int i = 0; i < 4; i++) {
+        int y = PY + 168 + i * 13;
+        dr_text(fb, st, PX + 18, y, 1, 0x8FB0D8, tn[i]);
+        bar(fb, st, PX + 62, y, 54, 7, tv[i], dr_hsv(g->hue, 0.5f, 1));
+    }
+    snprintf(b, sizeof b, "CELLS %d   GEN %u", pet->count, pet->max_gen);
+    dr_text(fb, st, nx, PY + 186, 2, 0xFFFFFF, b);
+    snprintf(b, sizeof b, "%s", pet->count ? DOING[pet->strat.id] : "IN THE SPORE VAULT");
+    dr_text(fb, st, nx, PY + 210, 1, 0x7FF4FF, b);
+    snprintf(b, sizeof b, "BORN %u  LOST %u", pet->births, pet->deaths);
+    dr_text(fb, st, nx, PY + 224, 1, 0x8FB0D8, b);
+    text_c(fb, st, DISH_CX, PY + PH - 20, 1, 0x5C7598, "TAP TO CLOSE");
+}
+static void draw_lab(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int st) {
+    panel(fb, st, PX, PY, PW, PH);
+    text_c(fb, st, DISH_CX, PY + 18, 3, 0xFFFFFF, "THE LAB");
+    text_c(fb, st, DISH_CX, PY + 50, 1, 0x8FB0D8, "HOW WARM IS THE DISH?");
+    button(fb, st, lab_minus(), 0x10305A, 0x5C9AE0, "-", 3);
+    button(fb, st, lab_plus(), 0x5A2010, 0xE08A5C, "+", 3);
+    /* the thermometer: cold blue to hot red, the pet's favourite marked */
+    rect_t m = lab_minus(), p = lab_plus();
+    int tx = m.x + m.w + 12, tw = p.x - 12 - tx, ty = m.y + 14;
+    for (int k = 0; k < tw; k++) {
+        float t = k / (float)tw;
+        dr_rect(fb, st, tx + k, ty, 1, 12, t < 0.5f ? dr_hsv(0.6f - t * 0.3f, 0.8f, 0.9f) : dr_hsv(0.12f - (t - 0.5f) * 0.24f, 0.85f, 1), 255);
+    }
+    float fav = d->strain[DISH_PET].vault.heat_opt;
+    dr_line(fb, st, tx + tw * fav, ty - 6, tx + tw * fav, ty + 18, 2, 0x4CF08C, 255);
+    dr_disc(fb, st, tx + tw * d->temp, ty + 6, 9, 0xFFFFFF, 255);
+    dr_glow(fb, st, tx + tw * d->temp, ty + 6, 16, 0xFFFFFF, 90);
+    text_c(fb, st, tx + tw * fav, ty + 22, 1, 0x4CF08C, "BEST");
+    button(fb, st, lab_light(), d->light ? 0x4A4010 : 0x101828, d->light ? 0xFFE07A : 0x5C7598, d->light ? "LIGHT: ON" : "LIGHT: OFF", 2);
+    button(fb, st, page_done(), 0x10304A, 0x5CC8E0, "DONE", 2);
+    (void)u;
+}
+static void draw_meds(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int st) {
+    panel(fb, st, PX, PY, PW, PH);
+    text_c(fb, st, DISH_CX, PY + 18, 3, 0xFFFFFF, "MEDICINE");
+    rect_t a = meds_drug(), v = meds_virus();
+    button(fb, st, a, 0x3A1020, 0xFF5470, NULL, 2);
+    icon_glyph(fb, st, ICON_MEDS, a.x + 34, a.y + a.h * 0.5f, 20, 1);
+    dr_text(fb, st, a.x + 64, a.y + 16, 2, 0xFFFFFF, "ANTIBIOTIC");
+    dr_text(fb, st, a.x + 64, a.y + 40, 1, 0xFFB0BC, "KILLS BACTERIA. TAP TO DROP.");
+    button(fb, st, v, 0x261040, 0xC07CFF, NULL, 2);
+    dr_glow(fb, st, v.x + 34, v.y + v.h * 0.5f, 18, 0xC07CFF, 160);
+    dr_ring(fb, st, v.x + 34, v.y + v.h * 0.5f, 10, 2, 0xF0DCFF, 255);
+    dr_line(fb, st, v.x + 26, v.y + v.h * 0.5f - 8, v.x + 42, v.y + v.h * 0.5f + 8, 3, 0xFF4E5E, 255);
+    dr_text(fb, st, v.x + 64, v.y + 16, 2, 0xFFFFFF, "ANTIVIRAL");
+    dr_text(fb, st, v.x + 64, v.y + 40, 1, 0xDCC0FF, "CLEARS THE VIRUSES AT ONCE.");
+    button(fb, st, page_done(), 0x10304A, 0x5CC8E0, "DONE", 2);
+    (void)u; (void)d;
+}
+
+void dish_ui_render(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int st) {
+    const strain_t *pet = &d->strain[DISH_PET];
+    char b[48];
+    /* the emote over the colony */
+    if (u->emote_t > 0 && pet->count > 0 && u->page == PAGE_NONE) {
+        float k = fminf(1, u->emote_t * 2) * fminf(1, (3 - u->emote_t) * 4 + 0.01f);
+        float x = pet->cx, y = pet->cy - 34 - (3 - u->emote_t) * 4;
+        if (y < DISH_CY - DISH_RY + 40) y = DISH_CY - DISH_RY + 40;
+        if (u->emote == NEED_COUNT) {
+            for (int h = 0; h < 3; h++) {
+                float hx = x + (h - 1) * 16, hy = y - h % 2 * 6, s = 5;
+                dr_glow(fb, st, hx - s * 0.5f, hy - s * 0.2f, s * 0.8f, 0xFF5C8A, (int)(255 * k));
+                dr_glow(fb, st, hx + s * 0.5f, hy - s * 0.2f, s * 0.8f, 0xFF5C8A, (int)(255 * k));
+                dr_glow(fb, st, hx, hy + s * 0.5f, s * 0.7f, 0xFF5C8A, (int)(255 * k));
+            }
+        } else {
+            dr_disc(fb, st, x, y, 17, 0xF4F8FF, (int)(235 * k));
+            dr_disc(fb, st, x - 6, y + 18, 4, 0xF4F8FF, (int)(235 * k));
+            dr_disc(fb, st, x - 10, y + 25, 2.5f, 0xF4F8FF, (int)(235 * k));
+            dr_disc(fb, st, x, y, 15, 0x0A1224, (int)(255 * k));
+            icon_glyph(fb, st, icon_for_need(u->emote), x, y, 13, k);
+        }
+    }
+    /* the microscope */
+    if (u->lens >= 0 && u->page == PAGE_NONE) {
+        const cell_t *c = &d->cell[u->lens];
+        float lx, ly, lr; lens_geom(d, u->lens, &lx, &ly, &lr);
+        dr_line(fb, st, c->x, c->y, lx + (c->x - lx) * lr / fmaxf(1, hypot2(c->x - lx, c->y - ly)),
+                ly + (c->y - ly) * lr / fmaxf(1, hypot2(c->x - lx, c->y - ly)), 1, 0x7FA8D8, 90);
+        dr_ring(fb, st, c->x, c->y, dish_cell_radius(c) * 2.6f, 1, 0x7FF4FF, 160);
+        dish_render_lens(d, c->x, c->y, u->lens_zoom, fb, st, lx, ly, lr);
+        const char *who = c->strain == DISH_PET ? pet->name : SPECIES_NAMES[c->species];
+        snprintf(b, sizeof b, "%s  GEN %u", who, c->gen);
+        int w = dr_text_w(b, 1) + 14;
+        dr_round_rect(fb, st, (int)(lx - w / 2), (int)(ly + lr - 18), w, 13, 6, 0x0A1224, 220);
+        text_c(fb, st, lx, (int)(ly + lr - 15), 1, 0xC8F4FF, b);
+    }
+    /* the top: the pet's name and its mood */
+    if (u->page == PAGE_NONE) {
+        int ty = (int)(DISH_CY - DISH_RY + 14);
+        snprintf(b, sizeof b, "%s", pet->name);
+        int w = dr_text_w(b, 2);
+        float fx = DISH_CX + w * 0.5f + 14;
+        text_c(fb, st, DISH_CX - 8, ty, 2, 0xE8F2FF, b);
+        uint32_t mc = need_color(u->mood);
+        dr_glow(fb, st, fx, ty + 7, 11, mc, 110);
+        dr_disc(fb, st, fx, ty + 7, 7, mc, 255);
+        dr_disc(fb, st, fx - 2.5f, ty + 5.5f, 1.2f, 0x06060A, 255);
+        dr_disc(fb, st, fx + 2.5f, ty + 5.5f, 1.2f, 0x06060A, 255);
+        float cv = (u->mood - 0.5f) * 3;
+        dr_line(fb, st, fx - 3, ty + 9 - cv * 0.2f, fx, ty + 9 + cv, 1, 0x06060A, 255);
+        dr_line(fb, st, fx, ty + 9 + cv, fx + 3, ty + 9 - cv * 0.2f, 1, 0x06060A, 255);
+    }
+    /* the icon arc */
+    if (u->page == PAGE_NONE) {
+        int w = worst_need(u);
+        icon_t alert = u->needs[w] < 0.3f && pet->count > 0 ? icon_for_need(w) : ICON_COUNT;
+        for (int i = 0; i < ICON_COUNT; i++) {
+            float x, y; dish_ui_icon_pos((icon_t)i, &x, &y);
+            bool active = (i == ICON_CLEAN && u->tool == TOOL_WIPE) || (i == ICON_MEDS && u->tool == TOOL_DRUG) || (i == ICON_ZOOM && u->lens >= 0);
+            draw_icon(fb, st, i, x, y, active, i == (int)alert ? 1 : 0, u->clock);
+        }
+    }
+    /* a tool in hand */
+    if (u->tool != TOOL_NONE && u->page == PAGE_NONE) {
+        rect_t r = tool_chip();
+        button(fb, st, r, 0x10304A, 0x7FF4FF, "DONE", 2);
+        text_c(fb, st, DISH_CX, r.y + r.h + 6, 1, 0x7FF4FF, u->tool == TOOL_DRUG ? "TAP TO DROP MEDICINE" : "RUB TO CLEAN THE DISH");
+    }
+    /* a toast */
+    if (u->toast_t > 0 && u->page == PAGE_NONE && u->extinct_show <= 0) {
+        float a = fminf(1, u->toast_t * 3);
+        int w = dr_text_w(u->toast, 2) + 24, y = (int)(DISH_CY - DISH_RY * 0.55f) + (u->tool != TOOL_NONE ? 44 : 0);
+        dr_round_rect(fb, st, (int)(DISH_CX - w / 2), y - 8, w, 30, 15, 0x0A1224, (int)(215 * a));
+        text_c(fb, st, DISH_CX, y, 2, 0xFFFFFF, u->toast);
+    }
+    /* extinct: the vault counts down */
+    if (pet->count == 0 && pet->extinct_t > 0) {
+        dr_rect(fb, st, 0, 0, DISH_W, DISH_H, 0x000000, 120);
+        float k = 0.6f + 0.4f * sinf(u->clock * 3);
+        dr_glow(fb, st, DISH_CX, DISH_CY, 70, dr_hsv(pet->vault.hue, 0.5f, 1), (int)(110 * k));
+        dr_cell_icon(fb, st, (species_t)pet->species, &pet->vault, DISH_CX, DISH_CY, 3.2f, 0, u->clock * 0.2f, false, 0);
+        snprintf(b, sizeof b, "%s DIED OUT", pet->name);
+        text_c(fb, st, DISH_CX, (int)(DISH_CY - 90), 3, 0xFFFFFF, b);
+        text_c(fb, st, DISH_CX, (int)(DISH_CY - 60), 1, 0x8FB0D8, "THE SPORE VAULT IS WAKING IT UP");
+        snprintf(b, sizeof b, "%d", (int)ceilf(pet->extinct_t));
+        text_c(fb, st, DISH_CX, (int)(DISH_CY + 54), 4, dr_hsv(pet->vault.hue, 0.4f, 1), b);
+    }
+    switch (u->page) {
+    case PAGE_CARD: draw_card(u, d, fb, st); break;
+    case PAGE_LAB:  draw_lab(u, d, fb, st); break;
+    case PAGE_MEDS: draw_meds(u, d, fb, st); break;
+    default: break;
+    }
+}

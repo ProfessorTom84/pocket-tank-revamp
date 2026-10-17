@@ -10,8 +10,8 @@ ifeq ($(shell uname -s),Darwin)
 ARCH    ?= -arch x86_64
 endif
 ARCH    ?=
-SDL_CFLAGS := $(shell sdl2-config --cflags)
-SDL_LIBS   := $(shell sdl2-config --libs)
+SDL_CFLAGS := $(shell sdl2-config --cflags 2>/dev/null)
+SDL_LIBS   := $(shell sdl2-config --libs 2>/dev/null)
 
 # `make ROUND=1`: the round 466 px bowl (the Waveshare 1.75C's world) as
 # ./fishsim-round, built beside the rectangle's in build-round/.
@@ -41,7 +41,7 @@ LDFLAGS := $(ARCH) $(SDL_LIBS) -lm
 
 APP_SRCS  := main.c advisor_llm.c persist_port_sim.c net_port_sim.c ../common/tank.c ../common/update.c ../common/advisor.c ../common/render.c ../common/icons.c ../common/progression.c ../common/setup.c ../common/audio.c ../common/notice.c ../common/sounds.c ../common/battery.c ../common/llm/q4_model.c ../common/llm/word_tok.c ../common/llm/advisor_core.c
 
-LVGL_SRCS := $(shell find lvgl/src -name '*.c')
+LVGL_SRCS := $(shell find lvgl/src -name '*.c' 2>/dev/null)
 OBJS      := $(patsubst %.c,$(BUILD)/%.o,$(filter-out ../common/%,$(APP_SRCS)) $(LVGL_SRCS)) $(patsubst ../common/%.c,$(BUILD)/common/%.o,$(filter ../common/%,$(APP_SRCS)))
 
 $(OUT): $(OBJS)
@@ -70,6 +70,28 @@ check-all:
 
 check-nomodel:
 	$(MAKE) NOMODEL=1 check
+
+# ---- Pocket Dish (the dish branch, 2026-10-16) ----
+# `make dish` -> ./dishsim: headless always (selftests, --snapshot); a window too
+# when sdl2-config is found. ROUND=1 / WATCH=1 / SQUARE=1 pick the glass as above.
+# Native arch (no $(ARCH)): it needs no LVGL and links a native SDL2 if there is one.
+DISH_SRCS := dish_main.c ../common/dish.c ../common/dish_brain.c ../common/dish_render.c ../common/dish_ui.c
+DISH_OUT  := $(subst fishsim,dishsim,$(OUT))
+ifneq ($(shell command -v sdl2-config 2>/dev/null),)
+DISH_SDL  := -DDISH_SDL $(SDL_CFLAGS)
+DISH_LIBS := $(SDL_LIBS)
+endif
+dish: $(DISH_OUT)
+$(DISH_OUT): $(DISH_SRCS) $(wildcard ../common/dish*.h)
+	$(CC) $(ROUNDF) -O2 -std=c11 -I../common -Wall -Wextra -Wno-unused-parameter $(DISH_SDL) -o $@ $(DISH_SRCS) $(DISH_LIBS) -lm
+dish-check: $(DISH_OUT)
+	./$(DISH_OUT) --selftest-dish && ./$(DISH_OUT) --selftest-pet
+dish-check-all:
+	$(MAKE) dish-check
+	$(MAKE) ROUND=1 dish-check
+	$(MAKE) WATCH=1 dish-check
+	$(MAKE) SQUARE=1 dish-check
+.PHONY: dish dish-check dish-check-all
 
 $(BUILD)/common/llm/%.o: ../common/llm/%.c
 	@mkdir -p $(dir $@)
