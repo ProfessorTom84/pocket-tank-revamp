@@ -27,7 +27,7 @@ typedef struct {
     /* the story page */
     int story_tab, story_top; float scroll_acc;
     /* toasts and moments */
-    char toast[48]; float toast_t;
+    char toast[64]; float toast_t;
     float extinct_show, back_show, confirm_t;
     float clock;
     int sel;                     /* the dex's / badges' tile being read, -1 none */
