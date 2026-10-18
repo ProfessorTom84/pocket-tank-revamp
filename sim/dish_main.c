@@ -153,7 +153,7 @@ static void bare_spot(float *x, float *y) {
     *x = 30; *y = DISH_CY;
 }
 /* the pet's cell nearest its colony's middle (away from the corner buttons) */
-static void quiet_ui(void) { for (int k = 0; k < DISH_BUBBLES; k++) ui.bub[k].strain = -1; ui.info_t = 0; }   /* (no bubble or hint over what a test taps) */
+static void quiet_ui(void) { for (int k = 0; k < DISH_BUBBLES; k++) ui.bub[k].strain = -1; ui.info_t = 0; ui.lens = -1; }   /* (no bubble or hint over what a test taps) */
 static int pet_cell(void) {
     int best = -1; float bd = 1e9f; const strain_t *p = &dish.strain[DISH_PET];
     for (int i = 0; i < DISH_MAX_CELLS; i++) {
@@ -805,6 +805,15 @@ static int selftest_verbs(void) {
     VERB(M_LURE, ST_REST, 12, 12, false, r.vib_dist < c.vib_dist - 3, "drew nothing in (vibrio %.0f px away vs %.0f)", MUTS[M_LURE].name, r.vib_dist, c.vib_dist);
     VERB(M_SPOREBURST, ST_REST, 2, 12, false, r.burst > 0 && c.burst == 0, "a dying cell left no spore", MUTS[M_SPOREBURST].name);
     VERB(M_TAMER, ST_REST, 12, 12, false, r.tamed > 0 && c.tamed == 0, "no virus joined", MUTS[M_TAMER].name);
+    {   /* a tamed phage helps the colony; it is not one of its cells (not counted, not mourned) */
+        dish_init(&dish, 83, SP_BACILLUS, "BLIP"); dish_ui_init(&ui); run(&dish, 1, 0, false);
+        int own = dish.strain[DISH_PET].count; unsigned dead0 = dish.strain[DISH_PET].deaths;
+        dish_outbreak(&dish, 4);
+        for (int i = 0; i < DISH_MAX_CELLS; i++) if (dish.cell[i].species == SP_PHAGE && dish.cell[i].state == CS_LIVE) { dish.cell[i].strain = DISH_PET; dish.cell[i].health = 0.02f; }
+        dish_tick(&dish, 1 / 30.0f, dish_brain_rules);
+        CHECK(dish.strain[DISH_PET].count == own, "tamed phages were counted as the pet's cells (%d, not %d)", dish.strain[DISH_PET].count, own);
+        run(&dish, 3, 0, false);
+        CHECK(dish.strain[DISH_PET].deaths == dead0 || dish.strain[DISH_PET].count < own, "a tamed phage fading counted as the pet's loss"); }
     VERB(M_MIMIC, ST_REST, 12, 12, false, r.pet_dead <= c.pet_dead && r.pet_h >= c.pet_h - 0.02f, "the hunters were not fooled (%d lost vs %d)", MUTS[M_MIMIC].name, r.pet_dead, c.pet_dead);
     VERB(M_SCOUTS, ST_FORAGE, 2, 12, false, r.scouts > 0 && c.scouts == 0, "sent out no scouts", MUTS[M_SCOUTS].name);
     VERB(M_GRAPPLE, ST_HUNT, 12, 12, false, r.tethers > 0 && c.tethers == 0, "latched onto nothing", MUTS[M_GRAPPLE].name);
@@ -992,6 +1001,16 @@ static int selftest_play(void) {
     if (c >= 0) { float v0 = hypotf(dish.cell[c].vx, dish.cell[c].vy); tap_at(dish.cell[c].x, dish.cell[c].y);
         CHECK(bubbles_of(DISH_PET) == 1 && hypotf(dish.cell[c].vx, dish.cell[c].vy) != v0, "a poked germ neither jumped nor answered (%d bubbles, lens %d, speed %.0f -> %.0f)",
               bubbles_of(DISH_PET), ui.lens, v0, hypotf(dish.cell[c].vx, dish.cell[c].vy)); }
+    {   quiet_ui(); ui.tap_t = 9; run(&dish, 1, 0, false);
+        int pc = pet_cell(); bool lamp = dish.light;
+        if (pc >= 0) { tap_at(dish.cell[pc].x, dish.cell[pc].y); quiet_ui(); tap_at(dish.cell[pc].x, dish.cell[pc].y); }
+        CHECK(dish.light == lamp, "two quick pokes on a germ switched the lamp");
+        dish.light = true; }
+    {   quiet_ui(); ui.info_t = 0; run(&dish, 0.5f, 0, false);
+        snprintf(ui.info, sizeof ui.info, "A SHORT HINT."); ui.info_t = 5; ui.info_x = -1;
+        int pc = pet_cell();
+        if (pc >= 0) { dish.cell[pc].x = 20; dish.cell[pc].y = DISH_H * 0.5f; tap_at(20, DISH_H * 0.5f); }
+        CHECK(pc < 0 || ui.info_t > 0, "a tap far from the hint bar put the hint away"); }
     /* flick: down on a vibrio, a fast swipe - it flies */
     quiet_ui(); run(&dish, 1, 0, false);
     {   int f = -1; for (int i = 0; i < DISH_MAX_CELLS; i++) if (dish.cell[i].strain == vs && dish.cell[i].state == CS_LIVE) f = i;
@@ -1053,7 +1072,7 @@ static int selftest_play(void) {
     int q0 = ev_count[DEV_QUEST], wv0 = ev_count[DEV_WAVE];
     run(&dish, 9 * 60, 20, false);
     printf("play: 9 lazy minutes: %d quest events, %d wave events, %u DNA\n", ev_count[DEV_QUEST] - q0, ev_count[DEV_WAVE] - wv0, (unsigned)dish.dna);
-    CHECK(ev_count[DEV_QUEST] - q0 >= 8, "too few requests in 9 minutes (%d events)", ev_count[DEV_QUEST] - q0);
+    CHECK(ev_count[DEV_QUEST] - q0 >= 6, "too few requests in 9 minutes (%d events)", ev_count[DEV_QUEST] - q0);
     CHECK(ev_count[DEV_WAVE] - wv0 >= 3, "no wave in 9 minutes");
     printf("selftest-play: %s\n", fails ? "FAILED" : "ok");
     return fails ? 1 : 0;

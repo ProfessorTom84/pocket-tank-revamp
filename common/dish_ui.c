@@ -262,7 +262,7 @@ void dish_ui_event(dish_ui_t *u, const dish_t *d, int ev, int strain) {
         if (pet_ev && u->toast_t <= 0) { snprintf(b, sizeof b, "%s CAUGHT A VIRUS", pet->name); dish_ui_toast(u, b, 3); }
         break;
     case DEV_STRAT:                                  /* the pet changed its mind: it says so */
-        if (pet->count) say_mind(u, d, DISH_PET, pet->strat.target, 0, 0);
+        if (pet->count && (ST_TARGETED(pet->strat.id) || u->chat_cd < 8)) say_mind(u, d, DISH_PET, pet->strat.target, 0, 0);
         break;
     case DEV_DIVIDE:
         if (pet_ev && (pet->births == 1 || pet->births % 25 == 0) && u->toast_t <= 0) {
@@ -449,6 +449,7 @@ static void page_tap(dish_ui_t *u, dish_t *d, float x, float y) {
     default: u->page = PAGE_NONE;
     }
 }
+static bool info_hit(const dish_ui_t *u, float x, float y);
 static void tap(dish_ui_t *u, dish_t *d, float x, float y) {
     if (u->setup) { setup_tap(u, d, x, y); return; }
     if (u->page != PAGE_NONE) { page_tap(u, d, x, y); return; }
@@ -462,10 +463,7 @@ static void tap(dish_ui_t *u, dish_t *d, float x, float y) {
         info(u, "DRAW A LINE ON THE DISH: IT BECOMES A WALL FOR 20 SECONDS.", -1, 0, 4);
         return;
     }
-    if (u->info_t > 0) {                             /* a tap on the explanation puts it away */
-        int w = DISH_W - 60, h = 64;
-        if (x > DISH_CX - w / 2 && x < DISH_CX + w / 2 && y > DISH_H - h - 48 && y < DISH_H - 24) { u->info_t = 0; return; }
-    }
+    if (info_hit(u, x, y)) { u->info_t = 0; return; }   /* a tap on the explanation puts it away */
     int bb = dish_ui_bubble_at(u, d, x, y);
     if (bb >= 0) { explain(u, d, u->bub[bb].strain); sfx(u, SND_TAP, 300, 0); return; }
     if ((d->quest.state != QS_NONE || d->wave.on) && in_rect(quest_pill(), x, y)) {
@@ -475,7 +473,20 @@ static void tap(dish_ui_t *u, dish_t *d, float x, float y) {
         sfx(u, SND_TAP, 300, 0);
         return;
     }
-    /* a double-tap: day or night */
+    if (u->lens >= 0) {                              /* a tap on the lens puts it away */
+        float lx, ly, lr; lens_geom(d, u->lens, &lx, &ly, &lr);
+        if (hypot2(x - lx, y - ly) < lr) { u->lens = -1; u->tap_t = 9; return; }
+    }
+    int c = dish_cell_at(d, x, y, 8);
+    if (c >= 0) {                                    /* a poke: it jumps, it answers, and the lens shows it */
+        dish_poke(d, c); open_lens(u, d, c);
+        char l[72]; int e = dish_poke_text(d, d->cell[c].strain, false, l, sizeof l);
+        say_from(u, d, d->cell[c].strain, d->cell[c].id, e, l, 0, 2.5f);
+        sfx(u, SND_TAP, 380, 0);
+        u->tap_t = 9;                                /* (two quick pokes are two pokes, not the lamp) */
+        return;
+    }
+    /* a double-tap on the agar: day or night */
     bool dbl = u->tap_t < 0.35f && hypot2(x - u->tap_x, y - u->tap_y) < 40;
     u->tap_t = 0; u->tap_x = x; u->tap_y = y;
     if (dbl) {
@@ -484,17 +495,7 @@ static void tap(dish_ui_t *u, dish_t *d, float x, float y) {
         dish_ui_toast(u, d->light ? "LAMP ON: DAYTIME" : "LAMP OFF: NIGHT", 2);
         return;
     }
-    if (u->lens >= 0) {                              /* a tap on the lens puts it away */
-        float lx, ly, lr; lens_geom(d, u->lens, &lx, &ly, &lr);
-        if (hypot2(x - lx, y - ly) < lr) { u->lens = -1; return; }
-    }
-    int c = dish_cell_at(d, x, y, 8);
-    if (c >= 0) {                                    /* a poke: it jumps, it answers, and the lens shows it */
-        dish_poke(d, c); open_lens(u, d, c);
-        char l[72]; int e = dish_poke_text(d, d->cell[c].strain, false, l, sizeof l);
-        say_from(u, d, d->cell[c].strain, d->cell[c].id, e, l, 0, 2.5f);
-        sfx(u, SND_TAP, 380, 0);
-    } else u->lens = -1;
+    u->lens = -1;
 }
 void dish_ui_touch(dish_ui_t *u, dish_t *d, float x, float y, bool down) {
     bool glass = u->page == PAGE_NONE && !u->setup;
@@ -1169,9 +1170,9 @@ static void draw_bubbles(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int 
 }
 
 /* ---- the explanation bar: hints and what a tap means, at the bottom, pointing at what it is about ---- */
-static void draw_info(const dish_ui_t *u, uint16_t *fb, int st) {
-    if (u->info_t <= 0) return;
-    char lines[4][BUB_PER * 3 + 1];
+typedef struct { char lines[4][BUB_PER * 3 + 1]; int nl, w, h; float y; } info_geom_t;
+static void info_geom(const dish_ui_t *u, info_geom_t *g) {
+    char (*lines)[BUB_PER * 3 + 1] = g->lines;
     int per = (DISH_W - 2 * (DISH_BTN_R * 2 + 18)) / 12;
     if (per > BUB_PER * 3) per = BUB_PER * 3;
     /* (a wider wrap than the bubbles': its own pass) */
@@ -1188,6 +1189,18 @@ static void draw_info(const dish_ui_t *u, uint16_t *fb, int st) {
     int w = per * 12 + 24, h = nl * BUB_LINE + 14;
     float y = DISH_H - 22 - h;
     while (y > DISH_CY && !(dish_inside(DISH_CX - w * 0.5f, y + h, 4) && dish_inside(DISH_CX + w * 0.5f, y + h, 4))) y -= 2;
+    g->nl = nl; g->w = w; g->h = h; g->y = y;
+}
+static bool info_hit(const dish_ui_t *u, float x, float y) {
+    if (u->info_t <= 0) return false;
+    info_geom_t g; info_geom(u, &g);
+    return fabsf(x - DISH_CX) < g.w * 0.5f && y >= g.y && y < g.y + g.h;
+}
+static void draw_info(const dish_ui_t *u, uint16_t *fb, int st) {
+    if (u->info_t <= 0) return;
+    info_geom_t g; info_geom(u, &g);
+    char (*lines)[BUB_PER * 3 + 1] = g.lines;
+    int nl = g.nl, w = g.w, h = g.h; float y = g.y;
     float a = fminf(1, u->info_t * 3);
     if (u->info_x >= 0) {                            /* a pointer at what it is about */
         float k = 0.5f + 0.5f * sinf(u->clock * 5);

@@ -33,7 +33,7 @@ void dish_quest_start(dish_t *d, int kind) {
     case Q_HERD: {
         float bx = DISH_CX, by = DISH_CY, bd = 0;
         for (int k = 0; k < 24; k++) {                  /* somewhere well away from the colony */
-            float x = dish_rand(d, 50, DISH_W - 50), y = dish_rand(d, 70, DISH_H - 50);
+            float x = dish_rand(d, 50, DISH_W - 50), y = dish_rand(d, 125, DISH_H - 50);   /* (clear of the banner) */
             if (!dish_inside(x, y, 45)) continue;
             float dd = dist(x, y, pet->cx, pet->cy);
             if (dd > bd) { bd = dd; bx = x; by = y; }

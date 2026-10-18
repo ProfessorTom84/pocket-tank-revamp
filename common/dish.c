@@ -445,8 +445,10 @@ static void kill(dish_t *d, int i, bool burst, int cause) {
     if (c->state == CS_DYING || c->state == CS_FREE) return;
     c->state = CS_DYING; c->dying_t = 0;
     strain_t *st = &d->strain[c->strain];
-    st->deaths++;
-    dish_story_death(d, c->strain, cause);
+    if (SP[c->species].virus == SP[st->species].virus) {   /* (a tamed phage fading is no loss of the strain's) */
+        st->deaths++;
+        dish_story_death(d, c->strain, cause);
+    }
     if (SP[c->species].virus) return;            /* a phage just fades */
     splat(d->nutr, c->x, c->y, 0.10f, 10, 1.0f); /* the remains feed the others */
     uint32_t rgb = burst ? 0xC07CFF : 0xFFFFFF;
@@ -529,8 +531,8 @@ static void gift(dish_t *d) {
     emit(DEV_GIFT, DISH_PET);
 }
 /* a cell's role in its strain's build, fixed by its id: a wall anchor, a scout */
-static bool is_anchor(const cell_t *c, const uint8_t *mu) { return mu[M_BIOFILM] && (c->id * 2654435761u >> 24) % 100 < 12u * mu[M_BIOFILM]; }
-static bool is_scout(const cell_t *c, const uint8_t *mu) { return mu[M_SCOUTS] && (c->id * 40503u >> 8) % 100 < 6u * mu[M_SCOUTS] && !is_anchor(c, mu); }
+static bool is_anchor(const cell_t *c, const uint8_t *mu) { return mu[M_BIOFILM] && !SP[c->species].virus && (c->id * 2654435761u >> 24) % 100 < 12u * mu[M_BIOFILM]; }
+static bool is_scout(const cell_t *c, const uint8_t *mu) { return mu[M_SCOUTS] && !SP[c->species].virus && (c->id * 40503u >> 8) % 100 < 6u * mu[M_SCOUTS] && !is_anchor(c, mu); }
 bool dish_cell_anchor(const dish_t *d, const cell_t *c) { return is_anchor(c, d->strain[c->strain].mut); }
 bool dish_cell_scout(const dish_t *d, const cell_t *c) { return is_scout(c, d->strain[c->strain].mut); }
 /* is a strain one that d's strain s should treat as something to fear (it hunts s) */
@@ -880,7 +882,9 @@ static void census(dish_t *d) {
         if (c->state == CS_FREE) continue;
         d->n_live++;
         if (c->state == CS_DYING) continue;
-        int s = c->strain; cnt[s]++;
+        int s = c->strain;
+        if (SP[c->species].virus != SP[d->strain[s].species].virus) continue;   /* (a tamed phage helps its strain; it isn't one of its cells) */
+        cnt[s]++;
         if (c->state == CS_SPORE) spores[s]++;
         acc[s][0] += c->energy; acc[s][1] += c->health; acc[s][2] += c->comfort;   /* (cell_tick's, a tick old) */
         acc[s][3] += dish_field(d->waste, c->x, c->y); acc[s][4] += c->infect > 0;
