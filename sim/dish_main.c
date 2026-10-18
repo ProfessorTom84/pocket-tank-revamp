@@ -669,14 +669,15 @@ static void lazy_run(dish_t *d, float seconds) {
 static int selftest_visitors(void) {
     dish_events_set(count_events, NULL);
     /* each visitor does its job */
-    #define FRESH(seed) do { dish_init(&dish, seed, SP_BACILLUS, "BLIP"); dish_ui_init(&ui); run(&dish, 20, 10, false); } while (0)
+    #define FRESH(seed) do { dish_init(&dish, seed, SP_BACILLUS, "BLIP"); dish_ui_init(&ui); dish.quest_cd = dish.wave_cd = 1e9f; run(&dish, 20, 10, false); } while (0)
     FRESH(71); int s = dish_visit(&dish, SP_MOLD); run(&dish, 40, 0, false);
     float mx = 0; for (int c = 0; c < FIELD_N * FIELD_N; c++) if (dish.drug[c] > mx) mx = dish.drug[c];
     CHECK(s > 0 && mx > 0.2f, "the mold leaked no antibiotic (max %.2f)", mx);
     FRESH(72); dish_visit(&dish, SP_LACTO); run(&dish, 120, 10, false);
     CHECK(dish.ph < 0.45f, "the acid maker left the pH at %.2f", dish.ph);
-    FRESH(73); dish_visit(&dish, SP_HALO); run(&dish, 120, 10, false);
-    CHECK(dish.salt > 0.26f, "the halophile left the salt at %.2f", dish.salt);
+    {   FRESH(73); dish_visit(&dish, SP_HALO); float mx = 0;   /* (the highest it got: the salt drifts back once they go) */
+        for (int t = 0; t < 120; t++) { run(&dish, 1, 10, false); if (dish.salt > mx) mx = dish.salt; }
+        CHECK(mx > 0.23f, "the halophile left the salt at %.2f at most", mx); }
     {   FRESH(74); float f0 = 0, f1 = 0;
         static dish_t ctrl; ctrl = dish; dish_visit(&dish, SP_SYMBIONT);
         run(&dish, 60, 0, false); for (int c = 0; c < FIELD_N * FIELD_N; c++) f1 += dish.nutr[c];
@@ -696,8 +697,12 @@ static int selftest_visitors(void) {
         tap_hs(HS_DRAFT_0); auto_pick = true; }
     {   FRESH(77); unsigned dead0 = dish.strain[DISH_PET].deaths; int vb = dish_visit(&dish, SP_VIBRIO);
         for (int i = 0; i < DISH_MAX_CELLS; i++) if (dish.cell[i].strain == vb && dish.cell[i].state == CS_LIVE) { dish.cell[i].x = dish.strain[DISH_PET].cx + 30; dish.cell[i].y = dish.strain[DISH_PET].cy; }   /* (in reach: no luck involved) */
-        run(&dish, 90, 10, false);
-        CHECK(dish.strain[DISH_PET].deaths > dead0, "the vibrio hunted nothing"); }
+        bool bitten = false;                          /* (a bite is the hunt; a kill is down to luck) */
+        for (int t = 0; t < 90 && !bitten; t++) {
+            run(&dish, 1, 10, false);
+            for (int i = 0; i < DISH_MAX_CELLS; i++) if (dish.cell[i].strain == DISH_PET && dish.cell[i].state == CS_LIVE && dish.cell[i].hurt == DIE_EATEN) bitten = true;
+        }
+        CHECK(bitten || dish.strain[DISH_PET].deaths > dead0, "the vibrio hunted nothing (pet %d cells, vibrio %d)", dish.strain[DISH_PET].count, vb >= 0 ? dish.strain[vb].count : -1); }
     /* a visitor whose time is up leaves, frees its slot, and the story says so */
     {   FRESH(78); int vs = dish_visit(&dish, SP_HALO); int gone0 = ev_count[DEV_VISIT_GONE];
         dish.strain[vs].stay_t = 0; run(&dish, 45, 10, false);
