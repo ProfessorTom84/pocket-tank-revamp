@@ -8,6 +8,8 @@
 #   tools/flash_square.sh --build-only
 #   tools/flash_square.sh --full        # a blank board: clear nvs, the model, bootloader + table + app
 #   SQUARE_SERIAL=AA:BB:CC:DD:EE:FF tools/flash_square.sh    # the board, by its USB serial (or set it once in tools/boards.local.sh)
+#   DISH=1 tools/flash_square.sh        # Pocket Dish instead of the tank (sdkconfig.dish, its own build dir)
+#   DISH=1 tools/flash_square.sh --model   # ...and the dish model, model/out/model_dish_q4.bin, into the model partition (docs/dish-ai.md)
 #
 # Its own build directory and sdkconfig (~/.cache/pocket-tank/fw-build-216):
 # the tank's fw-build is never touched. No preflight: this board holds no tank
@@ -17,11 +19,13 @@ cd "$(dirname "$0")/.."
 [ -f tools/boards.local.sh ] && . tools/boards.local.sh   # your boards' USB serials (not tracked)
 SERIAL=${SQUARE_SERIAL:-}
 [ -n "$SERIAL" ] || { echo "flash_square: set SQUARE_SERIAL=<the board's USB serial> (in tools/boards.local.sh, or the environment)"; exit 1; }
-B=${TANK_BUILD:-~/.cache/pocket-tank/fw-build-216}   # another checkout (a worktree) builds in its own dir: a build dir is tied to its source path
+DISH=${DISH:-0}
+if [ "$DISH" = 1 ]; then B=${TANK_BUILD:-~/.cache/pocket-tank/fw-build-216-dish}; DEFAULTS="sdkconfig.defaults;sdkconfig.square;sdkconfig.dish"
+else B=${TANK_BUILD:-~/.cache/pocket-tank/fw-build-216}; DEFAULTS="sdkconfig.defaults;sdkconfig.square"; fi   # another checkout (a worktree) builds in its own dir: a build dir is tied to its source path
 . ~/esp/esp-idf/export.sh > /dev/null 2>&1 || { echo "flash_square: ESP-IDF export failed"; exit 1; }
 [ -f firmware/keys/ota_signing_key.pem ] || { echo "flash_square: no firmware/keys/ota_signing_key.pem - tools/ota_key.sh"; exit 1; }
 LOG=$(mktemp); trap 'rm -f "$LOG"' EXIT
-( cd firmware && idf.py -B "$B" -DSDKCONFIG="$B/sdkconfig" -DSDKCONFIG_DEFAULTS="sdkconfig.defaults;sdkconfig.square" build ) > "$LOG" 2>&1 \
+( cd firmware && idf.py -B "$B" -DSDKCONFIG="$B/sdkconfig" -DSDKCONFIG_DEFAULTS="$DEFAULTS" build ) > "$LOG" 2>&1 \
   || { echo "flash_square: build FAILED"; grep -Ei "error|fatal|failed" "$LOG" | head -30; exit 1; }
 grep -E "pocket_tank.bin binary size" "$LOG" || true
 grep -q "CONFIG_POCKET_TANK_SQUARE=y" "$B/sdkconfig" || { echo "flash_square: $B is not a SQUARE build"; exit 1; }
@@ -38,11 +42,17 @@ PY
 ) || { echo "flash_square: no board with USB serial $SERIAL on USB"; exit 1; }
 echo "flash_square: the square ($SERIAL) is $PORT"
 ESPTOOL="python -m esptool --chip esp32s3 -p $PORT -b 460800"
+if [ "$DISH" = 1 ] && [[ " $* " == *" --model "* ]]; then
+  [ -f model/out/model_dish_q4.bin ] || { echo "flash_square: no model/out/model_dish_q4.bin (docs/dish-ai.md)"; exit 1; }
+  $ESPTOOL --after no_reset write_flash 0x290000 model/out/model_dish_q4.bin | grep -E "Wrote|verified|rror"
+fi
 if [[ " $* " == *" --full "* ]]; then
   $ESPTOOL --after no_reset erase_region 0x9000 0x7000 | grep -E "Erase completed|rror"
-  $ESPTOOL --after no_reset write_flash 0x290000 model/out/model_q4.bin | grep -E "Wrote|verified|rror"
-  python tools/model_trailer.py --check --build-dir "$B" || exit 1          # the model's trailer (docs/OTA.md): without it the tank runs rules
-  $ESPTOOL --after no_reset write_flash 0xA8F000 "$B/model_trailer.bin" | grep -E "Wrote|verified|rror"
+  if [ "$DISH" != 1 ]; then                                                 # (the dish's model is --model's)
+    $ESPTOOL --after no_reset write_flash 0x290000 model/out/model_q4.bin | grep -E "Wrote|verified|rror"
+    python tools/model_trailer.py --check --build-dir "$B" || exit 1          # the model's trailer (docs/OTA.md): without it the tank runs rules
+    $ESPTOOL --after no_reset write_flash 0xA8F000 "$B/model_trailer.bin" | grep -E "Wrote|verified|rror"
+  fi
   ( cd "$B" && $ESPTOOL write_flash "@flash_args" | grep -E "Wrote|verified|rror" )
 else
   # otadata too: after an over-the-air update the board boots ota_1, and an app written to ota_0 alone would never run

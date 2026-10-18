@@ -111,20 +111,21 @@ kbd { font: 500 12px/1 var(--mono); color: var(--food); border: 1px solid #4a3a1
     <div>
       <h2>On the glass</h2>
       <dl>
-        <dt>Tap</dt><dd>Drop food, or tap a germ to look closer</dd>
-        <dt>Drag</dt><dd>Stir the dish</dd>
-        <dt>Hold</dt><dd>Warm the spot under your finger</dd>
-        <dt>Tap x3</dt><dd>Rap the glass: everyone scatters</dd>
-        <dt>Icons</dt><dd>Feed, lab, medicine, clean, zoom, card</dd>
+        <dt>Hold</dt><dd>Shine light: food grows under it, and each germ decides whether to come</dd>
+        <dt>Drag</dt><dd>Make a current: herd your colony, push a threat away</dd>
+        <dt>Arrows</dt><dd>Tilt the box: everything drifts downhill</dd>
+        <dt>Tap</dt><dd>Look closer at a germ and read its thought</dd>
+        <dt>Tap x2</dt><dd>The lamp: day or night</dd>
+        <dt>Corners</dt><dd>STORY (top left), DISH (top right)</dd>
       </dl>
     </div>
     <div>
       <h2>Bench keys</h2>
       <div class="keys">
-        <div><kbd>N</kbd> Light on or off</div>
+        <div><kbd>N</kbd> Lamp on or off</div>
         <div><kbd>O</kbd> A virus outbreak</div>
         <div><kbd>F</kbd> Ten times faster</div>
-        <div><kbd>D</kbd> Fifty DNA, to try the lab's unlocks</div>
+        <div><kbd>D</kbd> Fifty DNA, to try the unlocks</div>
       </div>
     </div>
     <p class="status">Each board keeps its own dish in this browser, and lives through the time you were away, just as a board does after a power-off.</p>
@@ -215,7 +216,13 @@ kbd { font: 500 12px/1 var(--mono); color: var(--food); border: 1px solid #4a3a1
     if (!M || e.metaKey || e.ctrlKey || e.altKey) return;
     const k = e.key.toLowerCase();
     if ("nofd".includes(k) && k.length === 1) { M._web_key(k.charCodeAt(0)); if (k === "f") syncFast(); }
+    if (e.key.startsWith("Arrow")) { arrows[e.key] = 1; e.preventDefault(); tilt(); }
   });
+  /* the arrow keys tilt the box (as the board's motion sensor does) */
+  const arrows = {};
+  function tilt() { if (M) M._web_tilt(((arrows.ArrowRight || 0) - (arrows.ArrowLeft || 0)) * 0.8, ((arrows.ArrowDown || 0) - (arrows.ArrowUp || 0)) * 0.8); }
+  document.addEventListener("keyup", e => { if (e.key.startsWith("Arrow")) { arrows[e.key] = 0; tilt(); } });
+  window.addEventListener("blur", () => { for (const k in arrows) arrows[k] = 0; tilt(); });
 
   /* ---- a new dish, confirmed on the page ---- */
   const confirmEl = document.getElementById("confirm");

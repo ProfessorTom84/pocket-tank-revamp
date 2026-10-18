@@ -60,13 +60,20 @@
 typedef enum { SP_COCCUS, SP_BACILLUS, SP_SPIRILLUM, SP_CYANO, SP_MYXO, SP_PHAGE,
                SP_MOLD, SP_VIBRIO, SP_LACTO, SP_HALO, SP_SYMBIONT, SP_CILIATE, SP_DONOR, SP_COUNT } species_t;
 extern const bool SPECIES_FRIENDLY[SP_COUNT];   /* a visitor that helps the pet (the toast and the dex say so) */
-#define DISH_MUT_N 30                           /* = M_COUNT (dish_mut.h) */
+#define DISH_MUT_N 16                           /* = M_COUNT (dish_mut.h) */
 extern const char *const SPECIES_NAMES[SP_COUNT];
 
-typedef enum { ST_FORAGE, ST_SWARM, ST_DIVIDE, ST_HUNT, ST_HIDE, ST_REST, ST_SPORE, ST_SPREAD, ST_COUNT } strat_id_t;
+/* what a strain decides to do (dish schema v1: the AI's goals). The targeted ones act on another strain. */
+typedef enum { ST_FORAGE, ST_CLUSTER, ST_EXPLORE, ST_REST, ST_DIVIDE, ST_SPORE, ST_SEEK_LIGHT, ST_AVOID_LIGHT,
+               ST_HUNT, ST_FLEE, ST_GUARD, ST_BEFRIEND, ST_COUNT } strat_id_t;
 extern const char *const STRAT_NAMES[ST_COUNT];
+#define ST_TARGETED(g) ((g) >= ST_HUNT)
 
-typedef struct { uint8_t id; float urgency, confidence; } strat_t;
+/* a decision: the goal, the strain it is about (-1 none), how urgent, how sure (the AI's softmax) */
+typedef struct { uint8_t id; int8_t target; float urgency, confidence; } strat_t;
+
+/* how a cell died (the story's causes) */
+enum { DIE_STARVED, DIE_EATEN, DIE_VIRUS, DIE_POISON, DIE_HARSH, DIE_OLD, DIE_COUNT };
 
 /* what a cell inherits (copied with small mutations at every division) */
 typedef struct {
@@ -99,6 +106,11 @@ typedef struct {
     float comfort;           /* last tick's comfort, 0..1 (the census reads it rather than computing it again) */
     uint8_t state, species, strain, host;  /* host: a phage clamped onto a cell (index + 1), 0 when free */
     uint8_t nbrs;            /* how many cells touched it last tick (biofilm, quorum)*/
+    uint8_t hurt;            /* what hurt it last (DIE_*): the cause if it dies of it */
+    uint8_t tether;          /* grapple pili: the foreign cell it holds (index + 1), 0 none */
+    float stun_t;            /* > 0: stunned by a zap - it neither moves nor bites */
+    float jet_t;             /* > 0: jetting away; < 0: the jet recharging */
+    float hatch_t;           /* a spore from a spore burst: seconds until it hatches */
     genome_t g;
 } cell_t;
 
@@ -119,9 +131,14 @@ typedef struct {
     /* the build (dish_mut.c): a rank per mutation; only the pet drafts */
     uint8_t mut[DISH_MUT_N];
     float stay_t;            /* a visitor: seconds before it starts to leave (<= 0: it is leaving) */
+    /* the mind: the strains its last state line called other1..3 (-1 none), where it is headed, its timers */
+    int8_t other[3];
+    float wx, wy;            /* an explore waypoint, or where its scouts found food */
+    float zap_t, bloom_t;    /* the zap's and the quorum bloom's recharge */
+    float decided_t;         /* seconds since its goal last changed (the thought icon's pop-in) */
 } strain_t;
 
-typedef enum { PT_DROP, PT_RIPPLE, PT_SHARD, PT_SPARK, PT_HEART } part_kind_t;
+typedef enum { PT_DROP, PT_RIPPLE, PT_SHARD, PT_SPARK, PT_HEART, PT_ZAP } part_kind_t;   /* PT_ZAP: an arc to (vx, vy) */
 typedef struct { float x, y, vx, vy, t, life; uint32_t rgb; uint8_t kind, used; } part_t;
 
 typedef struct {
@@ -159,6 +176,16 @@ typedef struct {
     uint32_t next_draft_gen;
     /* the visitors */
     float visit_t, gift_cd;
+    /* the keeper's hands: a held finger is light, the box's tilt is gravity */
+    float beam_x, beam_y, beam;   /* the light under the finger (0..1, rises while held) */
+    float tilt_x, tilt_y;         /* -1..1: which way is down */
+    /* the story (dish_story.c): a log of what happened, and a sample of the dish a minute */
+    struct { uint16_t min; uint8_t type, a, b, v; uint16_t x; } log[96];
+    struct { uint8_t pet, others, food, births, deaths, cause, goal, guests; } series[120];
+    uint16_t log_head, log_n, series_head, series_n;
+    float run_t;                  /* seconds of this run */
+    uint16_t m_births, m_deaths[DIE_COUNT];   /* the minute so far */
+    uint16_t best_count;
 } dish_t;
 
 typedef strat_t (*dish_brain_fn)(const dish_t *d, int strain);
@@ -187,6 +214,11 @@ void dish_dose(dish_t *d, float x, float y, float amount);   /* antibiotic */
 void dish_antiviral(dish_t *d);                              /* clears the free phages */
 void dish_wipe(dish_t *d, float x, float y, float r);        /* wipes waste under a stroke */
 void dish_uv(dish_t *d, float seconds);                      /* the UV lamp: more mutations, a little harm */
+void dish_light(dish_t *d, float x, float y, float dt);     /* a finger held on the glass is light: food blooms under it */
+void dish_set_tilt(dish_t *d, float x, float y);            /* which way is down (-1..1): everything drifts that way */
+float dish_light_at(const dish_t *d, float x, float y);      /* the lamp and the finger's light at a point */
+bool dish_cell_anchor(const dish_t *d, const cell_t *c);     /* a biofilm wall's anchor */
+bool dish_cell_scout(const dish_t *d, const cell_t *c);      /* one of the strain's scouts */
 int  dish_add_sample(dish_t *d, species_t sp);               /* a new colony mid-dish (-1: no room, or already here) */
 int  dish_visit(dish_t *d, species_t sp);                    /* a visitor arrives at the glass's edge (-1: no room, or here) */
 bool dish_visitor_here(const dish_t *d, species_t sp);       /* living cells of that kind, not the pet's */
@@ -206,7 +238,7 @@ float dish_cell_radius(const cell_t *c);
 
 /* events (sounds are feedback, never behavior: one listener, may only enqueue) */
 enum { DEV_FEED, DEV_DIVIDE, DEV_POP, DEV_BURST, DEV_INFECT, DEV_EXTINCT, DEV_RESPAWN, DEV_OUTBREAK, DEV_STRAT, DEV_BADGE,
-       DEV_VISIT, DEV_VISIT_GONE, DEV_GIFT, DEV_DRAFT, DEV_RUN_OVER, DEV_COUNT };
+       DEV_VISIT, DEV_VISIT_GONE, DEV_GIFT, DEV_DRAFT, DEV_RUN_OVER, DEV_ZAP, DEV_BLOOM, DEV_COUNT };
 /* DEV_BADGE: strain = the badge; DEV_VISIT / DEV_VISIT_GONE: strain = the species; DEV_GIFT: a free card (gene transfer) */
 typedef void (*dish_event_fn)(int ev, int strain, void *ud);
 void dish_events_set(dish_event_fn fn, void *ud);
@@ -214,6 +246,8 @@ void dish_emit(int ev, int strain);
 
 /* the rule brain (dish_brain.c) — the LLM's place once the dish model is distilled */
 strat_t dish_brain_rules(const dish_t *d, int strain);
-void    dish_encode(const dish_t *d, int strain, char *out, int n);   /* the state line a model would read */
+void    dish_encode(const dish_t *d, int strain, char *out, int n);   /* the state line the AI reads (dish schema v1) */
+void    dish_fill_others(dish_t *d, int strain);                    /* (re)pick its other1..3: the nearest strains, as the mind sees them */
+int     dish_lexicon(const char **out, int cap);                    /* every word the line and the answer use: the tokenizer's vocabulary */
 
 #endif

@@ -86,7 +86,7 @@ void dish_prog_tick(dish_t *d, float dt) {
     if (phages > 0) d->outbreak_on = 1;
     else if (d->outbreak_on) {
         d->outbreak_on = 0;
-        if (pet->count > 0) { award(d, BADGE_SURVIVOR); if (pet->mut[M_CRISPR]) d->crispr = 1; }   /* CRISPR: it remembers this one */
+        if (pet->count > 0) award(d, BADGE_SURVIVOR);
     }
     /* the run's badges */
     if (pet->max_gen >= 100) award(d, BADGE_RUN100);
@@ -97,10 +97,12 @@ void dish_prog_tick(dish_t *d, float dt) {
     for (int sp = 0; sp < SP_COUNT; sp++) if (SPECIES_FRIENDLY[sp] && !(d->dex & DEX_SPECIES(sp))) friends = false;
     if (friends) award(d, BADGE_FRIENDS);
     if (d->run_over || pet->count == 0) return;
-    /* the draft: a mutation card every DRAFT generations (up to three waiting) */
-    while (pet->max_gen >= d->next_draft_gen) {
-        d->next_draft_gen += DISH_DRAFT_GENS;
-        if (d->drafts < 3) { d->drafts++; dish_emit(DEV_DRAFT, DISH_PET); }
+    /* the draft: a mutation card every DRAFT generations. Never more than one: the dish waits for the pick,
+       and generations that pass while one waits (time away) are not owed */
+    if (d->drafts) { if (d->next_draft_gen <= pet->max_gen) d->next_draft_gen = pet->max_gen + DISH_DRAFT_GENS; }
+    else if (pet->max_gen >= d->next_draft_gen) {
+        d->next_draft_gen = pet->max_gen + DISH_DRAFT_GENS;
+        d->drafts = 1; dish_emit(DEV_DRAFT, DISH_PET);
     }
     /* the director: now and then, a visitor - friendlier early in a run, more threats as it goes on */
     if ((d->visit_t -= dt) <= 0) {

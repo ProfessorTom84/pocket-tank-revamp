@@ -28,6 +28,9 @@ extern int64_t dish_render_prof_us[DISH_PROF_N];
  * drawn in a circle of radius rad centred at screen (cx, cy). */
 void dish_render_lens(const dish_t *d, float wx, float wy, float zoom, uint16_t *fb, int stride, float cx, float cy, float rad);
 
+/* The thought icons over each colony and the lines to their targets (on by default). */
+extern bool dish_render_thoughts;
+
 /* The mood the pet's faces wear: 0 sad .. 1 happy (dish_ui.c sets it from the needs). */
 extern float dish_render_mood;
 

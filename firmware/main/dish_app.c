@@ -7,13 +7,16 @@
  *   - the PWR key: a short press saves and powers the board off (the PMIC);
  *     the next press is a cold boot, and the dish lives the time away
  *     through in one step (dish_sleep) when the board has a clock
- *   - the frame is drawn in two bands, one per core: core 1 has no model to
- *     run in this game, so it renders the bottom half while core 0 does the top
+ *   - the frame is drawn in two bands, one per core: core 1 renders the bottom
+ *     half while core 0 does the top; between bands, core 1 thinks - every
+ *     strain's mind is the dish model (dish_ai.c, the "model" partition), run
+ *     at a lower priority so a band always preempts it. No model: the rules
  *   - the save is one NVS blob (dish_save), written every minute and at power-off
  * ponytail: power-off is the only night; light sleep and the tank's drowse
  * come back when the dish has been lived with on a real board. */
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -39,6 +42,9 @@
 #include "dish.h"
 #include "dish_render.h"
 #include "dish_ui.h"
+#include "dish_ai.h"
+#include "q4_model.h"                 /* q4_fast_alloc */
+#include "esp_partition.h"
 
 #ifdef CONFIG_POCKET_TANK_DISPLAY_SH8601
 extern i2c_master_bus_handle_t board_i2c_bus(void);
@@ -54,6 +60,9 @@ static dish_t *dish;
 static dish_ui_t ui;
 static uint16_t *fb[2];
 static bool s_pmic, s_nvs;
+static dish_brain_fn s_brain = dish_brain_rules;
+extern const uint8_t dish_tok_start[] asm("_binary_dish_tokenizer_bin_start");
+extern const uint8_t dish_tok_end[]   asm("_binary_dish_tokenizer_bin_end");
 
 /* render.c and update.c (linked through the ports) ask for this */
 const char *version_port_string(void) { return esp_app_get_description()->version; }
@@ -106,6 +115,31 @@ static void band_task(void *arg) {
     }
 }
 
+/* ---- core 1, between bands: the minds (lower priority than the band, so it only fills the gaps) ---- */
+static SemaphoreHandle_t s_ai_mx;
+static void ai_lock(void) { xSemaphoreTake(s_ai_mx, portMAX_DELAY); }
+static void ai_unlock(void) { xSemaphoreGive(s_ai_mx); }
+static void ai_task(void *arg) {
+    (void)arg;
+    for (;;) vTaskDelay(dish_ai_step() ? 1 : pdMS_TO_TICKS(30));   /* (a tick's breath between thoughts; a nap when no one waits) */
+}
+static void *psram_alloc(size_t n) { return heap_caps_malloc(n, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT); }
+static void *sram_alloc(size_t n) { return heap_caps_malloc(n, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT); }
+static int64_t clock_us(void) { return esp_timer_get_time(); }
+/* the dish model in the "model" partition (docs/dish-ai.md); anything else there (the tank's) is refused */
+static void open_ai(void) {
+    const esp_partition_t *mp = esp_partition_find_first(ESP_PARTITION_TYPE_DATA, 0x40, "model");
+    const void *map; esp_partition_mmap_handle_t h;
+    if (!mp || esp_partition_mmap(mp, 0, mp->size, ESP_PARTITION_MMAP_DATA, &map, &h) != ESP_OK) { ESP_LOGW(TAG, "no model partition: the rules think"); return; }
+    q4_fast_alloc = sram_alloc;
+    if (!dish_ai_open(map, mp->size, dish_tok_start, dish_tok_end - dish_tok_start, psram_alloc)) { ESP_LOGW(TAG, "no dish model in the partition: the rules think"); return; }
+    s_ai_mx = xSemaphoreCreateMutex();
+    dish_ai_set_lock(ai_lock, ai_unlock);
+    dish_ai_clock_us = clock_us;
+    s_brain = dish_ai_brain;
+    ESP_LOGI(TAG, "the dish model is thinking (internal heap %u KB free)", (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024);
+}
+
 static void power_off(void) {
     ESP_LOGI(TAG, "PWR: saving, powering off (a press brings the dish back)");
     save_dish();
@@ -138,7 +172,12 @@ static void dish_task(void *arg) {
         if (down) { lx = x; ly = y; dish_ui_touch(&ui, dish, x, y, true); }
         else if (was_down) dish_ui_touch(&ui, dish, lx, ly, false);
         was_down = down;
-        dish_tick(dish, dt, dish_brain_rules);
+        {   /* the box's tilt is gravity in the dish (a dead zone, so a desk that isn't level stays still) */
+            float tx, ty; imu_port_tilt(&tx, &ty);
+            tx = fabsf(tx) < 0.12f ? 0 : tx * 1.6f; ty = fabsf(ty) < 0.12f ? 0 : ty * 1.6f;
+            dish_set_tilt(dish, tx, ty);
+        }
+        if (!dish_ui_paused(&ui)) dish_tick(dish, dt, s_brain);   /* (a draft waits for its pick: the dish holds still) */
         dish_ui_tick(&ui, dish, dt);
         for (int pitch, cue; (cue = dish_ui_take_sound(&ui, &pitch)) >= 0;) audio_port_play(cue, pitch);
         brightness_apply(!dish->light);
@@ -162,11 +201,13 @@ static void dish_task(void *arg) {
         if (now - last_save > SAVE_EVERY_US) { save_dish(); last_save = now; }
         if (now - last_log > 10 * 1000000LL && frames) {
             const strain_t *pet = &dish->strain[DISH_PET];
-            ESP_LOGI(TAG, "%.1f fps | tick %.1f ms, top band %.1f, bottom band %.1f (wait %.1f), ui %.1f, flush %.1f | %d cells, %s %d (%s), DNA %u | heap int %u KB",
+            dish_ai_stats_t ai = dish_ai_stats();
+            ESP_LOGI(TAG, "%.1f fps | tick %.1f ms, top band %.1f, bottom band %.1f (wait %.1f), ui %.1f, flush %.1f | %d cells, %s %d (%s), DNA %u | heap int %u KB | ai %s: %u thoughts, %.0f ms each, %u of %u asks answered",
                      frames * 1e6f / (now - last_log), tick_us / 1e3f / frames, top_us / 1e3f / frames, s_band_us / 1e3f / frames,
                      wait_us / 1e3f / frames, ui_us / 1e3f / frames, flush_us / 1e3f / frames,
                      dish->n_live, pet->name, pet->count, STRAT_NAMES[pet->strat.id], (unsigned)dish->dna,
-                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024);
+                     (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024,
+                     dish_ai_ready() ? "model" : "rules", (unsigned)ai.answered, ai.ms_mean, (unsigned)ai.used, (unsigned)ai.asked);
             tick_us = top_us = wait_us = ui_us = flush_us = s_band_us = 0; frames = 0; last_log = now;
         }
         int rest = (int)((FRAME_MIN_MS * 1000 - (esp_timer_get_time() - now)) / 1000);
@@ -200,7 +241,8 @@ void app_main(void) {
     codec_port_init(board_i2c_bus());
     audio_port_init(board_i2c_bus());
     imu_port_init(board_i2c_bus());
-    /* the world: internal RAM if it fits with room to spare (no model in this game), else PSRAM */
+    open_ai();                                  /* (before the world: the model's hot buffers want internal SRAM first) */
+    /* the world: internal RAM if it fits with room to spare, else PSRAM */
     if (heap_caps_get_free_size(MALLOC_CAP_INTERNAL) > sizeof(dish_t) + 96 * 1024)
         dish = heap_caps_calloc(1, sizeof(dish_t), MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
     if (!dish) dish = heap_caps_calloc(1, sizeof(dish_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -222,5 +264,6 @@ void app_main(void) {
              esp_ptr_external_ram(dish) ? "PSRAM" : "internal RAM",
              (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL) / 1024);
     xTaskCreatePinnedToCore(band_task, "band", 6144, NULL, 4, NULL, 1);
+    if (dish_ai_ready()) xTaskCreatePinnedToCore(ai_task, "minds", 8192, NULL, 2, NULL, 1);
     xTaskCreatePinnedToCore(dish_task, "dish", 12288, NULL, 4, NULL, 0);
 }

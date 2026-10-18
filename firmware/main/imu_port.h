@@ -19,6 +19,7 @@ bool imu_port_moving(void);
 bool imu_port_handled(void);
 int  imu_port_motion(void);                       /* last poll's movement, counts (director / tuning) */
 void imu_port_last(int16_t out[3], int *motion);  /* the last poll's raw sample + its movement (director `imu`) */
+void imu_port_tilt(float *x, float *y);           /* gravity along the glass in g: +x right, +y down the picture (the dish's tilt) */
 /* drowse bracket: quiesce the accel before the panel/touch rails cut (a
  * powered chip beside rail transitions is the latch-up recipe that railed
  * X/Z on 2026-08-31 - a full power-off revived them), then soft-reset +

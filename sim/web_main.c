@@ -43,12 +43,14 @@ EMSCRIPTEN_KEEPALIVE void web_init(uint32_t seed, int save_len, float away_s) {
 /* one frame: dt seconds of the world (x10 when fast), then the picture */
 EMSCRIPTEN_KEEPALIVE void web_frame(float dt) {
     if (dt > 0.1f) dt = 0.1f;
-    for (int k = 0; k < (int)speed; k++) { dish_tick(&dish, dt, dish_brain_rules); dish_ui_tick(&ui, &dish, dt); }
+    for (int k = 0; k < (int)speed; k++) { if (!dish_ui_paused(&ui)) dish_tick(&dish, dt, dish_brain_rules); dish_ui_tick(&ui, &dish, dt); }
     dish_render(&dish, fb, DISH_W);
     dish_ui_render(&ui, &dish, fb, DISH_W);
 }
 
 EMSCRIPTEN_KEEPALIVE void web_touch(float x, float y, int down) { dish_ui_touch(&ui, &dish, x, y, down != 0); }
+/* the box's tilt (-1..1 each way, +y = down the glass): the arrow keys, or a phone's motion sensor */
+EMSCRIPTEN_KEEPALIVE void web_tilt(float x, float y) { dish_set_tilt(&dish, x, y); }
 
 EMSCRIPTEN_KEEPALIVE int web_save(void) { return (int)dish_save(&dish, save_buf, sizeof save_buf); }
 
@@ -67,7 +69,7 @@ EMSCRIPTEN_KEEPALIVE int *web_sound(void) {
     return NULL;
 }
 
-/* the keys the desktop window has: N light, O outbreak, F 10x time, D +50 DNA */
+/* the keys the desktop window has: N lamp, O outbreak, F 10x time, D +50 DNA */
 EMSCRIPTEN_KEEPALIVE void web_key(int c) {
     switch (c) {
     case 'n': dish.light = !dish.light; break;

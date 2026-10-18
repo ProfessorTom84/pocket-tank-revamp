@@ -177,6 +177,15 @@ void imu_port_poll(int64_t now_us) {
 }
 
 bool imu_port_inverted(void) { return s_inverted; }
+/* the dish's tilt: gravity along the glass, in g (+x right, +y down the picture). Down is minus the up axis;
+ * the right axis is the other in-screen one, its sign a knob: if tilting right drifts the germs left, flip it. */
+static int s_right_sign = 1;
+void imu_port_tilt(float *x, float *y) {
+    int right = IMU_UP_AXIS == 0 ? 1 : 0;
+    float k = s_inverted ? -1.0f : 1.0f;            /* (the picture turned over: so is its down) */
+    *y = -k * s_last[IMU_UP_AXIS] * IMU_UP_SIGN / 16384.0f;
+    *x = k * s_right_sign * s_last[right] / 16384.0f;
+}
 void imu_port_last(int16_t out[3], int *motion) { for (int i = 0; i < 3; i++) out[i] = s_last[i]; if (motion) *motion = s_motion; }
 bool imu_port_handled(void) { return s_handled_us && esp_timer_get_time() - s_handled_us < IMU_MOTION_HOLD_US; }
 bool imu_port_moving(void) { return s_moved_us && esp_timer_get_time() - s_moved_us < IMU_MOTION_HOLD_US; }

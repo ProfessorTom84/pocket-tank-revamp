@@ -1,37 +1,34 @@
-/* dish_ui.h — the pet layer over the dish: needs, the icon arc, the strain
- * card, the lab and the medicine panels, the microscope, extinction.
+/* dish_ui.h — the pet layer over the dish: the glass is the interface.
  *
- * The platforms only route: they pass touches in (frame coordinates) and
- * call dish_ui_tick / dish_ui_render once a frame. Gestures on the agar:
- * tap a cell to look at it, tap the agar to feed, drag to stir, hold still
- * to warm, three quick raps to scare. With a tool in hand (the arc's MEDS
- * or CLEAN) the agar takes that tool instead. */
+ * The platforms only route: they pass touches in (frame coordinates), the
+ * box's tilt to dish_set_tilt, and call dish_ui_tick / dish_ui_render once a
+ * frame. On the agar: HOLD to shine light (food blooms under it), DRAG for a
+ * current, TAP a germ to look closer and read its thought, DOUBLE-TAP for day
+ * or night. Two corner buttons: STORY (top left) and DISH (top right). A
+ * mutation draft fills the screen and the dish waits (dish_ui_paused) until
+ * a card is picked. */
 #ifndef POCKET_DISH_UI_H
 #define POCKET_DISH_UI_H
 
 #include "dish.h"
 
-typedef enum { ICON_FEED, ICON_LAB, ICON_MEDS, ICON_CLEAN, ICON_ZOOM, ICON_CARD, ICON_COUNT } icon_t;
-typedef enum { PAGE_NONE, PAGE_CARD, PAGE_LAB, PAGE_MEDS, PAGE_DRAFT, PAGE_DEX, PAGE_BADGES, PAGE_RUNOVER } page_t;
-typedef enum { TOOL_NONE, TOOL_DRUG, TOOL_WIPE, TOOL_ZOOM } tool_t;
-typedef enum { NEED_FOOD, NEED_COMFORT, NEED_SPACE, NEED_CLEAN, NEED_HEALTH, NEED_COUNT } need_t;
-extern const char *const NEED_NAMES[NEED_COUNT];
+typedef enum { PAGE_NONE, PAGE_CARD, PAGE_DRAFT, PAGE_DEX, PAGE_BADGES, PAGE_RUNOVER, PAGE_STORY } page_t;
 
 typedef struct {
-    float needs[NEED_COUNT];     /* 0 bad .. 1 good, eased */
-    float mood;                  /* 0 sad .. 1 happy */
+    float mood;                  /* 0 sad .. 1 happy, eased */
     page_t page;
-    tool_t tool; float tool_idle;
     int lens;                    /* the cell under the microscope, -1 none */
     uint32_t lens_id;            /* (its id: a reused slot is a different cell) */
     float lens_zoom;
     /* touch tracking */
-    bool down; float dx0, dy0, lx, ly, down_t, still_t; bool dragged, warmed;
-    float tap_t[3]; int taps;
+    bool down, dragged, lighting; int on_button;
+    float dx0, dy0, lx, ly, down_t;
+    float tap_t, tap_x, tap_y;   /* the last tap: how long ago, where (a double-tap is the lamp) */
+    /* the story page */
+    int story_tab, story_top; float scroll_acc;
     /* toasts and moments */
-    char toast[40]; float toast_t;
-    float emote_cd, emote_t; int emote;   /* emote_cd: the wait before the next emote */
-    float extinct_show, back_show;
+    char toast[48]; float toast_t;
+    float extinct_show, back_show, confirm_t;
     float clock;
     int sel;                     /* the dex's / badges' tile being read, -1 none */
     int setup, starter, name_i;  /* the first-run setup: its page (0 = done), the chosen starter and name */
@@ -47,19 +44,20 @@ void dish_ui_render(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int strid
 void dish_ui_touch(dish_ui_t *u, dish_t *d, float x, float y, bool down);   /* call on every touch sample: down, move, up */
 void dish_ui_event(dish_ui_t *u, const dish_t *d, int ev, int strain);     /* forward dish events here (toasts) */
 void dish_ui_toast(dish_ui_t *u, const char *s, float seconds);
-void dish_ui_begin_setup(dish_ui_t *u);
-/* the next sound to play (SND_* from sounds.h, its pitch_q8 in *pitch: 256 = as recorded), -1 when none.
- * The dish has no sounds of its own yet: it plays the tank's bank at other pitches. */
-int  dish_ui_take_sound(dish_ui_t *u, int *pitch);                                     /* a new dish: welcome, pick a starter, name it, tips */
+void dish_ui_begin_setup(dish_ui_t *u);                                     /* a new dish: welcome, pick a starter, name it, tips */
+bool dish_ui_paused(const dish_ui_t *u);                                    /* true: don't tick the dish (a draft waits for its pick) */
+/* the next sound to play (SND_* from sounds.h, its pitch_q8 in *pitch: 256 = as recorded), -1 when none */
+int  dish_ui_take_sound(dish_ui_t *u, int *pitch);
+/* what a strain is thinking, in words: "BLIP: HUNTING THE VIBRIO  SURE 82%" */
+void dish_ui_thought(const dish_t *d, int strain, char *out, int n);
 
 /* layout, so a test or the director can tap things without a literal pixel */
-void dish_ui_icon_pos(icon_t i, float *x, float *y);
-typedef enum { HS_LAB_MINUS, HS_LAB_PLUS, HS_LAB_LIGHT, HS_DONE, HS_MEDS_DRUG, HS_MEDS_VIRUS, HS_TOOL_DONE,
-               HS_PH_MINUS, HS_PH_PLUS, HS_SALT_MINUS, HS_SALT_PLUS, HS_LAB_UV,
-               HS_CARD_DEX, HS_CARD_BADGES, HS_STARTER_0, HS_STARTER_1, HS_STARTER_2, HS_STARTER_3, HS_STARTER_4, HS_STARTER_5,
-               HS_NAME_PREV, HS_NAME_NEXT, HS_NAME, HS_MUTATE, HS_DRAFT_0, HS_DRAFT_1, HS_DRAFT_2 } hotspot_t;   /* (NEW RUN is HS_DONE) */
+typedef enum { HS_DONE, HS_STORY, HS_DISH, HS_CARD_DEX, HS_CARD_BADGES, HS_CARD_NEWRUN,
+               HS_STARTER_0, HS_STARTER_1, HS_STARTER_2, HS_STARTER_3, HS_STARTER_4, HS_STARTER_5,
+               HS_NAME_PREV, HS_NAME_NEXT, HS_NAME, HS_DRAFT_0, HS_DRAFT_1, HS_DRAFT_2,
+               HS_TAB_JOURNAL, HS_TAB_CHARTS, HS_STORY_BACK } hotspot_t;   /* (NEW RUN on the run-over page is HS_DONE) */
 void dish_ui_tile(page_t page, int i, float *x, float *y);   /* the centre of the dex's / badges' i-th tile */
-void dish_ui_hotspot(hotspot_t h, float *x, float *y);   /* the centre of a page's button */
-#define DISH_ICON_R 19
+void dish_ui_hotspot(hotspot_t h, float *x, float *y);       /* the centre of a page's button */
+#define DISH_BTN_R 21
 
 #endif

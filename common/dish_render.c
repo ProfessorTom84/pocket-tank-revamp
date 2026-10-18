@@ -375,7 +375,7 @@ static void draw_cell(const view_t *v, float clock, const cell_t *c, const uint8
     if (spore) r *= 0.72f;
     float dx = cosf(c->ang), dy = sinf(c->ang), px = -dy, py = dx;
     float p = c->div_t > 0 ? fminf(1, c->div_t / DISH_DIV_TIME) : 0;
-    shade_t sh = shade_for(c, fade);
+    shade_t sh = shade_for(c, fade * (1 - 0.18f * mu[M_MIMIC]));   /* (mimicry: harder to see, tier by tier) */
     seg_t sg[4]; int n = 0;
     float front = r;                                         /* how far ahead of the centre the face sits */
     switch (spore ? SP_COCCUS : c->species) {
@@ -457,7 +457,7 @@ static void draw_cell(const view_t *v, float clock, const cell_t *c, const uint8
     default: sg[n++] = (seg_t){ x, y, x, y };
     }
     /* the flagellum: a travelling wave off the back of the swimmers */
-    int tails = (c->species == SP_BACILLUS || c->species == SP_VIBRIO) + mu[M_FLAGELLA];
+    int tails = (c->species == SP_BACILLUS || c->species == SP_VIBRIO) + (mu[M_JET] >= 2);
     if (!spore && tails && c->state != CS_DYING) {
         float bx = x - dx * front, by = y - dy * front;
         float len = r * 4.2f, amp = r * 0.55f;
@@ -491,10 +491,21 @@ static void draw_cell(const view_t *v, float clock, const cell_t *c, const uint8
         for (int k = 0; k < n; k++) v_glow(v, sg[k].bx, sg[k].by, fmaxf(1.2f, r * 1.4f), 0xE8F07A, 0.7f);
     if (c->species == SP_CILIATE) {                          /* the guardian's mouth groove, and its ring of cilia */
         v_line(v, x + dx * r * 0.2f, y + dy * r * 0.2f, x + dx * r * 0.9f + px * r * 0.3f, y + dy * r * 0.9f + py * r * 0.3f, fmaxf(1, r * 0.12f), 0xBFE8FF, 0.5f, 0);
-        uint8_t cm[DISH_MUT_N] = { 0 }; cm[M_CILIA] = 1;
-        draw_muts(v, c, cm, x, y, r, front + r, dx, dy, clock);
+        float a = front + r, lw = fmaxf(0.7f, r * 0.07f);
+        int k = r < 4 ? 10 : 18;
+        for (int m = 0; m < k; m++) {
+            float t = m * TAU / k, w = sinf(c->phase * 6 + m) * 0.08f, ct = cosf(t), st_ = sinf(t), cw = cosf(t + w), sw = sinf(t + w);
+            v_line(v, x + dx * ct * a + px * st_ * r, y + dy * ct * a + py * st_ * r,
+                   x + (dx * cw * a + px * sw * r) * 1.32f, y + (dy * cw * a + py * sw * r) * 1.32f, lw, dr_hsv(shown_hue(&c->g), 0.2f, 1), 0.55f, 0);
+        }
     }
-    if (c->species == SP_DONOR) { uint8_t dm[DISH_MUT_N] = { 0 }; dm[M_GENETHIEF] = 1; draw_muts(v, c, dm, x, y, r, front + r, dx, dy, clock); }
+    if (c->species == SP_DONOR)                              /* the donor's two long pili, gene beads at their tips */
+        for (int m = -1; m <= 1; m += 2) {
+            float ct = cosf(m * 0.5f), st_ = sinf(m * 0.5f), a = front + r;
+            float ix = x + dx * ct * a + px * st_ * r, iy = y + dy * ct * a + py * st_ * r;
+            float ox = x + (dx * ct * a + px * st_ * r) * 2.7f, oy = y + (dy * ct * a + py * st_ * r) * 2.7f;
+            v_line(v, ix, iy, ox, oy, fmaxf(0.7f, r * 0.06f), 0xFFE08A, 0.5f, 0); v_glow(v, ox, oy, fmaxf(1, r * 0.25f), 0xFFE08A, 0.8f);
+        }
     /* the insides: a nucleoid, granules, the lamp's glint */
     uint32_t hue = dr_hsv(shown_hue(&c->g) + 0.06f, 0.35f, 0.9f);
     float gr = r * 0.32f;
@@ -528,51 +539,51 @@ static void draw_cell(const view_t *v, float clock, const cell_t *c, const uint8
  * reaches along its heading (r for a bead, more for a rod): features sit on the ellipse a x r round the centre. */
 static void draw_muts(const view_t *v, const cell_t *c, const uint8_t *mu, float x, float y, float r, float a, float dx, float dy, float clock) {
     float px = -dy, py = dx, ph = c->phase;
-    uint32_t hue = dr_hsv(shown_hue(&c->g), 0.45f, 1), rim = dr_hsv(shown_hue(&c->g), 0.2f, 1);
+    uint32_t rim = dr_hsv(shown_hue(&c->g), 0.2f, 1);
     float lw = fmaxf(0.8f, r * 0.12f);
     #define OUT(t, k, X, Y) do { float ct = cosf(t), st_ = sinf(t); X = x + (dx * ct * a + px * st_ * r) * (k); Y = y + (dy * ct * a + py * st_ * r) * (k); } while (0)
     float ox, oy, ix, iy;
-    if (mu[M_GLOW]) v_glow(v, x, y, a * 1.9f, hue, 0.07f * mu[M_GLOW]);   /* (faint: a colony's glows add up) */
-    if (mu[M_SLIME]) v_ring(v, x, y, a * 1.3f, fmaxf(1, r * 0.45f), 0x7FE8C8, 0.12f + 0.06f * mu[M_SLIME]);
-    if (mu[M_BIOFILM]) v_ring(v, x, y, a * 1.75f, lw, 0x9FD8FF, 0.12f * mu[M_BIOFILM]);
-    if (mu[M_QUORUM]) v_glow(v, x, y, a * 1.5f, 0x7FF4FF, 0.12f * mu[M_QUORUM] * (0.5f + 0.5f * sinf(clock * 3)));   /* the whole strain pulses as one */
+    /* round it: hazes and rings */
+    if (mu[M_TOXIN] && !(c->id & 3))                         /* the haze: drawn from every fourth cell, so a colony's cloud costs a quarter */
+        v_glow(v, x, y, a * (2.6f + 0.8f * mu[M_TOXIN]), 0x9CD830, 0.05f + 0.025f * mu[M_TOXIN]);
+    if (mu[M_LURE]) v_glow(v, x, y, a * (1.6f + 0.3f * mu[M_LURE]), 0x7FE8FF, (0.06f + 0.03f * mu[M_LURE]) * (0.6f + 0.4f * sinf(clock * 2.2f + ph * 0.2f)));
+    if (mu[M_BIOFILM]) v_ring(v, x, y, a * 1.3f, fmaxf(1, lw * 1.5f), 0x9FD8FF, 0.1f + 0.06f * mu[M_BIOFILM]);
+    if (mu[M_QUORUM]) v_glow(v, x, y, a * 1.3f, 0x7FF4FF, 0.06f * mu[M_QUORUM] * (0.5f + 0.5f * sinf(clock * 3)));   /* the whole strain pulses as one */
+    if (mu[M_SWARM])                                         /* a school's wake: short lines behind, all one way */
+        v_line(v, x - dx * a, y - dy * a, x - dx * (a + r * (1 + 0.8f * mu[M_SWARM])), y - dy * (a + r * (1 + 0.8f * mu[M_SWARM])), lw, rim, 0.3f, 0);
+    /* on the wall */
     if (mu[M_SPIKES]) {
         int k = 5 + 2 * mu[M_SPIKES];
-        for (int m = 0; m < k; m++) { float t = m * TAU / k + 0.3f; OUT(t, 1.0f, ix, iy); OUT(t, 1.5f, ox, oy); v_line(v, ix, iy, ox, oy, lw * 1.3f, rim, 0.85f, 0); }
+        for (int m = 0; m < k; m++) { float t = m * TAU / k + 0.3f; OUT(t, 1.0f, ix, iy); OUT(t, 1.3f + 0.12f * mu[M_SPIKES], ox, oy); v_line(v, ix, iy, ox, oy, lw * 1.3f, rim, 0.85f, 0); }
     }
-    if (mu[M_CILIA]) {
-        int k = r < 4 ? 10 : 18;
-        for (int m = 0; m < k; m++) {
-            float t = m * TAU / k, w = sinf(ph * 6 + m) * 0.25f;
-            OUT(t, 1.0f, ix, iy); OUT(t + w * 0.3f, 1.32f, ox, oy); v_line(v, ix, iy, ox, oy, fmaxf(0.7f, lw * 0.6f), rim, 0.55f, 0);
+    if (mu[M_ZAP]) {                                         /* sparks crawl on the wall, more at each tier */
+        for (int m = 0; m < mu[M_ZAP]; m++) {
+            float t = clock * (3 + m) + m * 2.1f + ph; OUT(t, 1.08f, ix, iy); OUT(t + 0.5f, 1.25f, ox, oy);
+            v_line(v, ix, iy, ox, oy, lw, 0xBFE8FF, 0.8f, 0); v_glow(v, ox, oy, fmaxf(1, r * 0.25f), 0x7FC8FF, 0.6f);
         }
     }
-    if (mu[M_TWITCH]) for (int m = 0; m < 6; m++) { float t = m * 1.05f + 0.5f; OUT(t, 1.0f, ix, iy); OUT(t, 1.9f, ox, oy); v_line(v, ix, iy, ox, oy, fmaxf(0.6f, lw * 0.45f), rim, 0.35f, 0); }
-    if (mu[M_GENETHIEF]) for (int m = -1; m <= 1; m += 2) {
-        float t = m * 0.5f; OUT(t, 1.0f, ix, iy); OUT(t, 2.7f, ox, oy);
-        v_line(v, ix, iy, ox, oy, fmaxf(0.7f, lw * 0.5f), 0xFFE08A, 0.5f, 0); v_glow(v, ox, oy, fmaxf(1, r * 0.25f), 0xFFE08A, 0.8f);
+    if (mu[M_GRAPPLE]) for (int m = 0; m < 2 + 2 * mu[M_GRAPPLE]; m++) {   /* pili: thin hooks reaching out */
+        float t = m * 1.05f + 0.5f; OUT(t, 1.0f, ix, iy); OUT(t, 1.6f + 0.2f * mu[M_GRAPPLE], ox, oy);
+        v_line(v, ix, iy, ox, oy, fmaxf(0.6f, lw * 0.45f), 0xFFC070, 0.45f, 0); v_glow(v, ox, oy, fmaxf(0.8f, r * 0.12f), 0xFFC070, 0.5f);
     }
-    if (mu[M_SIGNAL]) for (int m = -1; m <= 1; m += 2) { OUT(m * 0.35f, 1.0f, ix, iy); OUT(m * 0.45f, 1.6f, ox, oy); v_line(v, ix, iy, ox, oy, lw * 0.6f, rim, 0.6f, 0); v_glow(v, ox, oy, fmaxf(1, r * 0.2f), 0xFFFFFF, 0.7f); }
-    if (mu[M_PREDATOR]) {                                    /* a maw at the front, a red edge */
-        OUT(0.0f, 1.0f, ix, iy); OUT(0.5f, 1.35f, ox, oy); v_line(v, ix, iy, ox, oy, lw * 1.3f, 0xFF5A4E, 0.9f, 0);
-        OUT(-0.5f, 1.35f, ox, oy); v_line(v, ix, iy, ox, oy, lw * 1.3f, 0xFF5A4E, 0.9f, 0);
-        v_ring(v, x, y, a * 1.05f, lw, 0xFF5A4E, 0.25f * mu[M_PREDATOR]);
+    if (mu[M_ENGULF]) {                                      /* a maw at the front that opens and shuts */
+        float open = 0.35f + 0.2f * sinf(clock * 4 + ph) + 0.08f * mu[M_ENGULF];
+        OUT(0.0f, 0.85f, ix, iy); OUT(open, 1.3f, ox, oy); v_line(v, ix, iy, ox, oy, lw * 1.4f, 0xFF5A4E, 0.9f, 0);
+        OUT(-open, 1.3f, ox, oy); v_line(v, ix, iy, ox, oy, lw * 1.4f, 0xFF5A4E, 0.9f, 0);
     }
-    if (mu[M_TOXIN]) for (int m = 0; m <= mu[M_TOXIN]; m++) {
-        float t = clock * 1.4f + m * TAU / (mu[M_TOXIN] + 1); OUT(t, 1.55f, ox, oy); v_glow(v, ox, oy, fmaxf(1.2f, r * 0.3f), 0xC8F040, 0.8f);
+    if (mu[M_JET]) {                                         /* a nozzle at the back */
+        OUT(TAU / 2, 1.05f, ox, oy); v_glow(v, ox, oy, fmaxf(1, r * (0.25f + 0.08f * mu[M_JET])), 0xBFEFFF, c->jet_t > 0 ? 1.0f : 0.35f);
+        if (c->jet_t > 0) v_line(v, ox, oy, ox - dx * r * 3, oy - dy * r * 3, lw * 1.5f, 0xBFEFFF, 0.6f, 0);
     }
-    if (mu[M_PHAGESHIELD]) { int k = 4 + 2 * mu[M_PHAGESHIELD]; for (int m = 0; m < k; m++) { OUT(m * TAU / k + clock * 0.3f, 1.35f, ox, oy); v_glow(v, ox, oy, fmaxf(0.9f, r * 0.16f), 0xC07CFF, 0.6f); } }
-    if (mu[M_GLIDE]) for (int m = 1; m <= 3; m++) v_glow(v, x - dx * (a + r * 0.9f * m), y - dy * (a + r * 0.9f * m), fmaxf(1, r * 0.5f), 0x7FE8C8, 0.12f * mu[M_GLIDE] / m);
+    if (mu[M_TAMER]) { int k = 2 + 2 * mu[M_TAMER]; for (int m = 0; m < k; m++) { OUT(m * TAU / k + clock * 0.5f, 1.35f, ox, oy); v_glow(v, ox, oy, fmaxf(0.9f, r * 0.16f), 0xC07CFF, 0.6f); } }
+    if (mu[M_SYMBIOSIS]) for (int m = -1; m <= 1; m += 2) { OUT(m * 1.6f, 1.2f, ox, oy); v_glow(v, ox, oy, fmaxf(1, r * 0.2f), 0xFF7FAA, 0.3f + 0.15f * mu[M_SYMBIOSIS]); }
+    if (mu[M_MIMIC]) for (int m = 0; m < 3; m++) {           /* a mottled skin */
+        float t = m * 2.1f + c->id; OUT(t, 0.55f, ox, oy); v_glow(v, ox, oy, fmaxf(1, r * 0.35f), 0x405060, 0.35f);
+    }
     /* inside */
-    for (int m = 0; m < 2 + 2 * mu[M_CHLORO] && mu[M_CHLORO]; m++) { float t = m * 2.39996f + ph * 0.05f; v_glow(v, x + (dx * cosf(t) * a + px * sinf(t) * r) * 0.5f, y + (dy * cosf(t) * a + py * sinf(t) * r) * 0.5f, fmaxf(1, r * 0.2f), 0x4CF070, 0.75f); }
-    for (int m = 0; m < mu[M_GLUTTON]; m++) { float t = m * 2.1f + 1; v_glow(v, x + (dx * cosf(t) * a + px * sinf(t) * r) * 0.4f, y + (dy * cosf(t) * a + py * sinf(t) * r) * 0.4f, fmaxf(1, r * 0.28f), 0xFFB040, 0.55f); }
-    for (int m = 0; m < 2 * mu[M_SCAVENGER]; m++) { float t = m * 1.7f + 0.4f; v_glow(v, x + (dx * cosf(t) * a + px * sinf(t) * r) * 0.55f, y + (dy * cosf(t) * a + py * sinf(t) * r) * 0.55f, fmaxf(0.9f, r * 0.15f), 0xB07A40, 0.7f); }
-    if (mu[M_FERMENT]) for (int m = 0; m < mu[M_FERMENT]; m++) { float t = fmodf(clock * 0.7f + m * 0.37f, 1.0f); v_ring(v, x + px * r * (0.3f * m - 0.3f), y - r * (1.1f + t * 1.4f), fmaxf(0.8f, r * 0.14f), 0.6f, 0xFFFFFF, 0.4f * (1 - t)); }
-    if (mu[M_FASTDIV]) v_line(v, x + px * r * 0.95f, y + py * r * 0.95f, x - px * r * 0.95f, y - py * r * 0.95f, lw, 0xFFFFFF, 0.18f * mu[M_FASTDIV], 0);
-    if (mu[M_ACIDARMOR]) v_line(v, x - dx * a * 0.7f + px * r * 0.45f, y - dy * a * 0.7f + py * r * 0.45f, x + dx * a * 0.7f + px * r * 0.45f, y + dy * a * 0.7f + py * r * 0.45f, lw, 0xFF9A40, 0.25f * mu[M_ACIDARMOR], 0);
-    if (mu[M_BASEARMOR]) v_line(v, x - dx * a * 0.7f - px * r * 0.45f, y - dy * a * 0.7f - py * r * 0.45f, x + dx * a * 0.7f - px * r * 0.45f, y + dy * a * 0.7f - py * r * 0.45f, lw, 0x6A8CFF, 0.25f * mu[M_BASEARMOR], 0);
-    if (mu[M_CRISPR]) for (int m = -1; m <= 1; m++) v_line(v, x + dx * a * 0.3f * m + px * r * 0.6f, y + dy * a * 0.3f * m + py * r * 0.6f, x + dx * a * 0.3f * m - px * r * 0.6f, y + dy * a * 0.3f * m - py * r * 0.6f, lw * 0.8f, 0xC07CFF, 0.5f, 0);
-    if (mu[M_SPOREMASTER]) v_glow(v, x, y, fmaxf(1, r * 0.35f), 0xFFFFFF, 0.35f * mu[M_SPOREMASTER]);
+    for (int m = 0; m < 2 + 2 * mu[M_PHOTO] && mu[M_PHOTO]; m++) { float t = m * 2.39996f + ph * 0.05f; v_glow(v, x + (dx * cosf(t) * a + px * sinf(t) * r) * 0.5f, y + (dy * cosf(t) * a + py * sinf(t) * r) * 0.5f, fmaxf(1, r * 0.2f), 0x4CF070, 0.75f); }
+    if (mu[M_SPOREBURST]) for (int m = 0; m < mu[M_SPOREBURST]; m++) { float t = m * 2.1f + 1; v_glow(v, x + (dx * cosf(t) * a + px * sinf(t) * r) * 0.4f, y + (dy * cosf(t) * a + py * sinf(t) * r) * 0.4f, fmaxf(1, r * 0.22f), 0xFFFFFF, 0.6f); }
+    if (mu[M_SCOUTS]) v_glow(v, x + dx * a * 0.6f, y + dy * a * 0.6f, fmaxf(1, r * 0.2f), 0xFFE08A, 0.25f * mu[M_SCOUTS]);
     #undef OUT
 }
 
@@ -595,7 +606,101 @@ static void draw_parts(const view_t *v, const dish_t *d) {
         case PT_SHARD:  v_glow(v, x, y, 1.8f * s, p->rgb, 0.9f * (1 - t)); break;
         case PT_SPARK:  v_glow(v, x, y, 2.5f * s, p->rgb, 1 - t); break;
         case PT_HEART:  draw_heart(v, x, y, 3.2f * s, 0xFF5C8A, 0.9f * (1 - t)); break;
+        case PT_ZAP: {  /* a jagged arc from (x, y) to (vx, vy), re-jagged as it flickers */
+            float ex = WX(v, p->vx), ey = WY(v, p->vy), lx = x, ly = y, nx = -(ey - y), ny = ex - x;
+            float nl = sqrtf(nx * nx + ny * ny) + 1e-3f;
+            nx /= nl; ny /= nl;
+            uint32_t h = hash2(i, (int)(p->t * 30));
+            for (int k = 1; k <= 4; k++) {
+                float f = k / 4.0f, j = k < 4 ? ((int)((h >> (k * 6)) & 31) - 16) * 0.45f * s : 0;
+                float qx = x + (ex - x) * f + nx * j, qy = y + (ey - y) * f + ny * j;
+                v_line(v, lx, ly, qx, qy, 1.4f * s, 0xBFE8FF, 0.9f * (1 - t), 0);
+                lx = qx; ly = qy;
+            }
+            v_glow(v, ex, ey, 5 * s, 0x7FC8FF, 0.7f * (1 - t));
+            break; }
         }
+    }
+}
+
+/* what the strains are doing to each other, drawn over the cells: tethers, stuns, walls, scouts, blooms */
+static void draw_links(const view_t *v, const dish_t *d) {
+    for (int i = 0; i < DISH_MAX_CELLS; i++) {
+        const cell_t *c = &d->cell[i];
+        if (c->state != CS_LIVE) continue;
+        float x = WX(v, c->x), y = WY(v, c->y), r = dish_cell_radius(c) * v->s;
+        if (c->tether) {                                     /* grapple pili: a taut amber line to what it holds */
+            const cell_t *o = &d->cell[c->tether - 1];
+            if (o->state == CS_LIVE) v_line(v, x, y, WX(v, o->x), WY(v, o->y), fmaxf(1, 0.9f * v->s), 0xFFC070, 0.7f, 0);
+        }
+        if (c->stun_t > 0) v_ring(v, x, y, r * 1.6f, fmaxf(1, r * 0.15f), 0x7FC8FF, 0.5f * fminf(1, c->stun_t));
+        if (dish_cell_anchor(d, c)) {                        /* a wall's anchor: a thick plate the others hide behind */
+            v_ring(v, x, y, r * 1.5f, fmaxf(1.4f, r * 0.35f), 0x9FD8FF, 0.45f);
+            v_glow(v, x, y, r * 2.2f, 0x5FA8E8, 0.12f);
+        }
+        if (dish_cell_scout(d, c)) {                         /* a scout: a bright head and a trail */
+            v_glow(v, x, y, r * 1.4f, 0xFFE08A, 0.4f);
+            float sp = sqrtf(c->vx * c->vx + c->vy * c->vy) + 1e-3f;
+            v_line(v, x, y, x - c->vx / sp * r * 4, y - c->vy / sp * r * 4, fmaxf(1, r * 0.3f), 0xFFE08A, 0.3f, 0);
+        }
+        const strain_t *st = &d->strain[c->strain];
+        if (st->bloom_t < 0)                                 /* a quorum bloom: the colony lights up in a wave of color */
+            v_glow(v, x, y, r * 3, dr_hsv(fmodf(d->clock * 0.3f + c->x * 0.004f + c->y * 0.003f, 1), 0.6f, 1), 0.35f);
+    }
+}
+bool dish_render_thoughts = true;
+/* a strain's thought, as a little icon over its colony (12 goals, 12 drawings) */
+static void draw_thought_icon(const view_t *v, float x, float y, float s, int g, float k) {
+    float w = fmaxf(1.2f, s * 0.18f);
+    switch (g) {
+    case ST_FORAGE: v_glow(v, x, y, s * 0.55f, 0xFFC870, k); v_glow(v, x - s * 0.4f, y + s * 0.3f, s * 0.3f, 0xFFC870, k * 0.7f); break;
+    case ST_CLUSTER: for (int m = 0; m < 3; m++) v_disc(v, x + cosf(m * 2.094f) * s * 0.32f, y + sinf(m * 2.094f) * s * 0.32f, s * 0.24f, 0xBFE8FF, (int)(230 * k)); break;
+    case ST_EXPLORE: v_line(v, x - s * 0.5f, y, x + s * 0.5f, y, w, 0xBFE8FF, 0, (int)(230 * k));
+                     v_line(v, x + s * 0.5f, y, x + s * 0.15f, y - s * 0.35f, w, 0xBFE8FF, 0, (int)(230 * k));
+                     v_line(v, x + s * 0.5f, y, x + s * 0.15f, y + s * 0.35f, w, 0xBFE8FF, 0, (int)(230 * k)); break;
+    case ST_REST: for (int m = 0; m < 2; m++) { float o = m * s * 0.45f, z = s * (0.3f - m * 0.08f), zx = x - s * 0.2f + o, zy = y + s * 0.2f - o;
+                     v_line(v, zx - z, zy - z, zx + z, zy - z, w * 0.8f, 0x9FB8FF, 0, (int)(220 * k)); v_line(v, zx + z, zy - z, zx - z, zy + z, w * 0.8f, 0x9FB8FF, 0, (int)(220 * k));
+                     v_line(v, zx - z, zy + z, zx + z, zy + z, w * 0.8f, 0x9FB8FF, 0, (int)(220 * k)); } break;
+    case ST_DIVIDE: v_ring(v, x - s * 0.25f, y, s * 0.3f, w * 0.7f, 0x7FF0A0, k); v_ring(v, x + s * 0.25f, y, s * 0.3f, w * 0.7f, 0x7FF0A0, k); break;
+    case ST_SPORE: v_ring(v, x, y, s * 0.4f, w, 0xFFFFFF, k); v_glow(v, x, y, s * 0.25f, 0xFFFFFF, k); break;
+    case ST_SEEK_LIGHT: case ST_AVOID_LIGHT:
+        v_disc(v, x, y, s * 0.25f, 0xFFE07A, (int)(240 * k));
+        for (int m = 0; m < 8; m++) { float t = m * TAU / 8; v_line(v, x + cosf(t) * s * 0.36f, y + sinf(t) * s * 0.36f, x + cosf(t) * s * 0.55f, y + sinf(t) * s * 0.55f, w * 0.6f, 0xFFE07A, 0, (int)(220 * k)); }
+        if (g == ST_AVOID_LIGHT) v_line(v, x - s * 0.5f, y + s * 0.5f, x + s * 0.5f, y - s * 0.5f, w, 0xFF5A4E, 0, (int)(240 * k));
+        break;
+    case ST_HUNT: v_line(v, x - s * 0.45f, y - s * 0.35f, x + s * 0.1f, y, w, 0xFF5A4E, 0, (int)(240 * k)); v_line(v, x + s * 0.1f, y, x - s * 0.45f, y + s * 0.35f, w, 0xFF5A4E, 0, (int)(240 * k));
+                  v_line(v, x, y - s * 0.35f, x + s * 0.5f, y, w, 0xFF5A4E, 0, (int)(240 * k)); v_line(v, x + s * 0.5f, y, x, y + s * 0.35f, w, 0xFF5A4E, 0, (int)(240 * k)); break;
+    case ST_FLEE: v_line(v, x, y - s * 0.5f, x, y + s * 0.12f, w * 1.3f, 0xFFD040, 0, (int)(240 * k)); v_disc(v, x, y + s * 0.42f, w * 0.75f, 0xFFD040, (int)(240 * k)); break;
+    case ST_GUARD: v_line(v, x - s * 0.4f, y - s * 0.4f, x + s * 0.4f, y - s * 0.4f, w, 0x7FB8FF, 0, (int)(240 * k));
+                   v_line(v, x - s * 0.4f, y - s * 0.4f, x, y + s * 0.5f, w, 0x7FB8FF, 0, (int)(240 * k)); v_line(v, x + s * 0.4f, y - s * 0.4f, x, y + s * 0.5f, w, 0x7FB8FF, 0, (int)(240 * k)); break;
+    case ST_BEFRIEND: draw_heart(v, x, y, s * 0.32f, 0xFF5C8A, k); break;
+    }
+}
+static uint32_t goal_color(int g) { return g == ST_HUNT ? 0xFF5A4E : g == ST_FLEE ? 0xFFD040 : g == ST_GUARD ? 0x7FB8FF : 0xFF7FAA; }
+static void draw_thoughts(const view_t *v, const dish_t *d) {
+    for (int s = 0; s < DISH_MAX_STRAINS; s++) {
+        const strain_t *st = &d->strain[s];
+        if (!st->used || st->count == 0) continue;
+        int g = st->strat.id, t = st->strat.target;
+        float x = WX(v, st->cx), y = WY(v, st->cy);
+        if (ST_TARGETED(g) && t >= 0 && t < DISH_MAX_STRAINS && d->strain[t].used && d->strain[t].count) {
+            /* a dashed line from the colony to the strain its thought is about, marching toward it */
+            float tx = WX(v, d->strain[t].cx), ty = WY(v, d->strain[t].cy), lx = tx - x, ly = ty - y, L = sqrtf(lx * lx + ly * ly);
+            int n = (int)(L / 14);
+            float off = fmodf(d->clock * 1.5f, 1);
+            for (int k = 0; k < n; k++) {
+                float a = (k + off) / n, b = (k + off + 0.45f) / n;
+                if (b > 1) b = 1;
+                v_line(v, x + lx * a, y + ly * a, x + lx * b, y + ly * b, 1.6f, goal_color(g), 0.35f, 0);
+            }
+        }
+        /* the bubble pops in when the goal changes, and it is bold while the strain is sure */
+        float pop = fminf(1, st->decided_t * 4), sz = 13 * (pop < 1 ? 0.6f + 0.6f * pop : 1);
+        float bx = x, by = y - 34;
+        if (by < 20) by = y + 34;
+        v_disc(v, bx, by, sz, 0x060A14, 190);
+        v_ring(v, bx, by, sz, 1.2f, dr_hsv(shown_hue(&st->vault), 0.5f, 1), 0.6f);
+        draw_thought_icon(v, bx, by, sz * 1.25f, g, 0.5f + 0.5f * fminf(1, st->strat.confidence));
     }
 }
 
@@ -604,6 +709,10 @@ static void draw_world(const view_t *v, const dish_t *d) {
     draw_fields(v, d);
     prof(1);
     if (d->warm > 0.02f) v_glow(v, WX(v, d->warm_x), WY(v, d->warm_y), 46 * v->s, 0xFF5A1E, d->warm * 0.9f);
+    if (d->beam > 0.02f) {                                   /* the finger's light: a warm pool on the agar */
+        v_glow(v, WX(v, d->beam_x), WY(v, d->beam_y), 58 * v->s, 0xFFE6A8, d->beam * 0.45f);
+        v_glow(v, WX(v, d->beam_x), WY(v, d->beam_y), 18 * v->s, 0xFFFFFF, d->beam * 0.35f);
+    }
     /* spores and the dying under, the living over, the phages on top */
     for (int pass = 0; pass < 3; pass++)
         for (int i = 0; i < DISH_MAX_CELLS; i++) {
@@ -615,8 +724,10 @@ static void draw_world(const view_t *v, const dish_t *d) {
             if (x + r < v->x0 || x - r >= v->x1 || y + r < v->y0 || y - r >= v->y1) continue;
             draw_cell(v, d->clock, c, d->strain[c->strain].mut);
         }
+    draw_links(v, d);
     prof(2);
     draw_parts(v, d);
+    if (dish_render_thoughts && v->s == 1 && !v->circ) draw_thoughts(v, d);
     prof(3);
 }
 
@@ -648,15 +759,6 @@ void dish_render_band(const dish_t *d, uint16_t *fb, int stride, int y0, int y1)
     if (!(g_scene && g_bg)) draw_fields_glow(&v, d);
     v.fields_baked = true;
     draw_world(&v, d);
-    /* the UV lamp: a violet bar over the dish and its rays, flickering */
-    if (d->uv_t > 0) {
-        float k = fminf(1, d->uv_t) * (0.75f + 0.25f * sinf(d->clock * 23));
-        float ty = 5;                                /* (the glass's top edge, at its middle, on every board) */
-        v_line(&v, DISH_CX - 46, ty, DISH_CX + 46, ty, 5, 0xD8B0FF, 0, (int)(255 * k));
-        v_glow(&v, DISH_CX, ty, 60, 0x9A4CFF, 0.6f * k);
-        for (int m = -3; m <= 3; m++)
-            v_line(&v, DISH_CX + m * 12, ty + 4, DISH_CX + m * 52, ty + DISH_RY * 1.1f, 7, 0x7A3CFF, 0.07f * k, 0);
-    }
 }
 
 void dish_render_lens(const dish_t *d, float wx, float wy, float zoom, uint16_t *fb, int stride, float cx, float cy, float rad) {

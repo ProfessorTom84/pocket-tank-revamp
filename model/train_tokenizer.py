@@ -18,6 +18,7 @@ firmware will too (simpler than BPE). Training doc: <BOS> state -> goal.
 Usage: python3 train_tokenizer.py [--out out/tokenizer.bin] [--verify out/v2_clean.jsonl]
        python3 train_tokenizer.py --schema 3          # out/tokenizer_v3.bin (no names, + trust)
        python3 train_tokenizer.py --schema 4          # out/tokenizer_v4.bin (no shadow, + bored)
+       python3 train_tokenizer.py --schema 10         # out/tokenizer_v10.bin: Pocket Dish (schema_dish.md)
 The schema is chosen by --schema, or by the POCKET_SCHEMA environment variable
 when imported (train.py / probe_dist.py): POCKET_SCHEMA=3 python train.py ...
 """
@@ -34,7 +35,16 @@ SEP = " -> "
 SCHEMA = int(os.environ.get("POCKET_SCHEMA", "2"))
 
 
+DISH_LEXICON = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dish_lexicon.txt")
+
+
 def lexicon_for(schema):
+    if schema == 10:
+        # Pocket Dish (schema_dish.md): the words come from the C side itself
+        # (dishsim --dish-lexicon > dish_lexicon.txt), in its order, so the
+        # tokenizer, the sampler and the board can never disagree.
+        with open(DISH_LEXICON) as f:
+            return [w.strip() for w in f if w.strip()]
     head = (["fish", "mira", "bolt", "kelp", "nori", "zone"] if schema == 2
             else ["zone"])                                   # v3: names carry no signal - dropped
     ident = (["hunger", "energy", "stress", "curiosity", "bold", "social", "stage",
@@ -108,7 +118,7 @@ def verify(paths):
 def main():
     ap = argparse.ArgumentParser()
     here = os.path.dirname(os.path.abspath(__file__))
-    ap.add_argument("--schema", type=int, choices=(2, 3, 4), default=SCHEMA)
+    ap.add_argument("--schema", type=int, choices=(2, 3, 4, 10), default=SCHEMA)
     ap.add_argument("--out", default=None)
     ap.add_argument("--verify", default=None)
     args = ap.parse_args()
@@ -116,10 +126,11 @@ def main():
     if args.out is None:
         args.out = os.path.join(here, "out", "tokenizer.bin" if args.schema == 2 else f"tokenizer_v{args.schema}.bin")
     if args.verify is None:
-        args.verify = os.path.join(here, "out", f"v{args.schema}_traces*.jsonl")
+        args.verify = os.path.join(here, "out", "dish_traces*.jsonl" if args.schema == 10 else f"v{args.schema}_traces*.jsonl")
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     write_bin(args.out)
     sample = ("fish mira zone 2 hunger 7 -> seek_food urgency 8" if args.schema == 2
+              else "kind vibrio role threat count few energy 4 -> hunt other1 urgency 7" if args.schema == 10
               else "zone 2 hunger 7 trust 5 -> seek_food urgency 8")
     assert decode(encode(sample)) == sample, "round-trip failed"
     print(f"wrote {args.out}: schema v{args.schema}, vocab_size={VOCAB_SIZE}, sample = {len(encode(sample, bos=True))} tokens")
