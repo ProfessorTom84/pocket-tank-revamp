@@ -265,9 +265,13 @@ static int selftest_pet(void) {
     CHECK(dish.beam < 0.05f, "a drag made light");
     /* TILT: everything drifts downhill */
     run(&dish, 6, 0, false);
-    {   float y0 = dish.strain[DISH_PET].cy;
-        dish_set_tilt(&dish, 0, 1); run(&dish, 5, 0, false); dish_set_tilt(&dish, 0, 0);
-        CHECK(dish.strain[DISH_PET].cy > y0 + 15 || dish.strain[DISH_PET].cy > DISH_H * 0.75f, "tilting down moved the colony %.0f px", dish.strain[DISH_PET].cy - y0); }
+    {   /* each cell's own drift (the colony's middle moves with births and deaths too) */
+        static uint32_t id[DISH_MAX_CELLS]; static float y0[DISH_MAX_CELLS];
+        for (int i = 0; i < DISH_MAX_CELLS; i++) { id[i] = dish.cell[i].state == CS_LIVE && dish.cell[i].y < DISH_H * 0.6f ? dish.cell[i].id : 0; y0[i] = dish.cell[i].y; }
+        dish_set_tilt(&dish, 0, 1); run(&dish, 3, 0, false); dish_set_tilt(&dish, 0, 0);
+        float dy = 0; int n = 0;
+        for (int i = 0; i < DISH_MAX_CELLS; i++) if (id[i] && dish.cell[i].id == id[i] && dish.cell[i].state != CS_FREE && !dish_cell_anchor(&dish, &dish.cell[i])) { dy += dish.cell[i].y - y0[i]; n++; }
+        CHECK(n > 0 && dy / n > 20, "tilting down moved the cells %.0f px on average (%d cells)", n ? dy / n : 0, n); }
     /* TAP a germ: the lens, and its thought */
     run(&dish, 0.5f, 0, false);
     int c = pet_cell();
