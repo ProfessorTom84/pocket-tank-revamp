@@ -10,16 +10,42 @@ over OTA until that is decided.
 - **Hold** to shine light. Food blooms under the light. Each strain's mind decides whether to come
   to it or shy away (photo strains love it). This replaces feeding.
 - **Drag** to make a current. Use it to herd your colony or to push a threat away.
+- **Tap** a germ to poke it. It jumps, answers ("THAT TICKLES!"), and the lens shows it with its
+  thought.
+- **Swipe** a germ fast to flick it across the dish. It's the quickest way to throw a hunter off
+  your colony.
 - **Tilt** the box and everything drifts downhill. On the board this is the QMI8658, with a dead
   zone so a desk that isn't level stays still. In the sim and the browser it is the arrow keys.
-- **Tap** a germ to look closer. The lens shows its thought: "BLIP: FLEEING THE VIBRIO
-  SURE 82%".
-- **Double-tap** to switch the lamp, for day or night. Photosynthesis needs it; night is rest.
-- **STORY** (top left) opens the journal and the charts. **DISH** (top right) opens your strain's
-  card, with the Microbe-dex, the badges and NEW RUN (tap it twice).
+- **Double-tap** to switch the lamp, for day or night.
+- **The corner buttons**, each named under it:
+  - **STORY** (top left) opens the journal and the charts.
+  - **DISH** (top right) opens your strain's card, the Microbe-dex, the badges and NEW RUN (tap it
+    twice).
+  - **WALL** (bottom left) arms the pencil: the next line you draw becomes a wall no germ can
+    cross, for 20 s. Three walls at a time; one more every 12 s.
 
-Over each colony floats its thought: an icon for its goal. A dashed line runs to the strain the
-thought is about (red for a hunt, yellow for a flight, blue for guarding, pink for a friend).
+## The germs talk
+
+Every colony says what it thinks in a speech bubble over one of its cells: an emoji, its name, and
+a short, medium or long line ("LUNCH!" / "YOU LOOK DELICIOUS." / "COME HERE, LITTLE SNACK. I WON'T
+BITE... MUCH."). Colonies talk when their cells bump into each other (one speaks, the other
+answers), when a visitor arrives, when your colony changes its mind, and now and then on their
+own. What a colony says is part of its mind's answer: one of 28 things to say (`common/dish_talk.c`).
+Tap a bubble to see who that is and what it's doing. A dashed line still runs from each colony to
+the strain its goal is about.
+
+## Things to do
+
+- **Requests.** Every half minute or so your colony asks for something, shown as a banner under its
+  name with a timer, and as a bubble: shine light on us, grow to 24 cells, take us to the glowing
+  ring, keep the vibrios away, flick 3 of them, wall them off, take us to meet the symbionts. Each
+  pays DNA. Tap the banner to see how (`common/dish_quest.c`).
+- **Waves.** After your first mutation, every 4-6 minutes the dish is attacked: a red banner and
+  arrows warn "PHAGES FROM THE RIGHT! 5", then they come in from that side for 35 s. Lose 6 cells
+  or fewer and you win DNA. Currents, light, walls and flicks are your defences.
+- **First-time hints.** The first time each thing matters, a hint at the bottom points at it and
+  says what to do: the light, the bubbles, a visitor, the requests, walls, flicks, waves, tilt,
+  STORY and DISH. Each shows once (saved with the dish). Tap the hint to put it away.
 
 ## How a run goes
 
@@ -80,6 +106,8 @@ to, and how the colony spent its time. Both records are saved with the dish.
 | `common/dish_ai.c` | The model's minds: the constrained decode and the need-based scheduler |
 | `common/dish_mut.c` | The 16 mutations, the pressures, the draft |
 | `common/dish_story.c` | The journal and the minute samples |
+| `common/dish_talk.c` | What the germs say: the 28 things to say, their emoji and phrasings |
+| `common/dish_quest.c` | The colony's requests and the waves |
 | `common/dish_render.c` | The dark-field microscope, the verbs' looks, the thoughts; renders in bands, one per core |
 | `common/dish_ui.c` | The gestures, the corner buttons, the pages, the first-run setup, the sound queue |
 | `common/dish_prog.c` | DNA, badges, the Microbe-dex, unlocks, the visitor director, drafts coming due |
@@ -92,9 +120,10 @@ to, and how the colony spent its time. Both records are saved with the dish.
 make -C sim dish-check-all
 ```
 
-That runs the ten dish selftests on all four glasses: dish, pet (the controls), evolve, prog,
+That runs the eleven dish selftests on all four glasses: dish, pet (the controls), evolve, prog,
 render, run (drafts and runs), visitors, verbs (each mutation does its thing), mind (goals
-become movement, visitors decide, the story) and ai (the decode on a test model).
+become movement, visitors decide, the story), ai (the decode on a test model) and play (talk,
+hints, poke, flick, walls, requests and waves).
 
 ```bash
 cd sim && make dish && ./dishsim --snapshot /tmp/dish-

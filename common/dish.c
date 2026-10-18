@@ -3,6 +3,7 @@
 #include "dish_prog.h"
 #include "dish_mut.h"
 #include "dish_story.h"
+#include "dish_talk.h"
 #include <math.h>
 #include <string.h>
 
@@ -207,7 +208,7 @@ int dish_add_strain(dish_t *d, species_t sp, const char *name) {
             memset(st, 0, sizeof *st);
             st->used = true; st->species = (uint8_t)sp;
             strncpy(st->name, name ? name : SPECIES_NAMES[sp], sizeof st->name - 1);
-            st->strat = (strat_t){ sp == SP_PHAGE ? ST_HUNT : ST_FORAGE, -1, 5, 1 };
+            st->strat = (strat_t){ sp == SP_PHAGE ? ST_HUNT : ST_FORAGE, -1, 5, 1, 0 };
             st->other[0] = st->other[1] = st->other[2] = -1;
             st->vault = dish_species_genome(sp);
             return s;
@@ -261,17 +262,54 @@ void dish_init(dish_t *d, uint32_t seed, species_t pet, const char *pet_name) {
     d->offer[0] = d->offer[1] = d->offer[2] = 0xFF;
     d->next_draft_gen = DRAFT_GENS;
     d->visit_t = dish_rand(d, 120, 180);             /* the first visitor after a couple of minutes alone */
+    d->ink = DISH_WALLS;
+    d->quest_cd = 20;                                /* (the first request comes soon) */
+    d->wave_cd = dish_rand(d, 240, 330);
 }
 void dish_new_run(dish_t *d, uint32_t seed, species_t pet, const char *pet_name) {
-    uint32_t dna = d->dna, badges = d->badges, nb = d->badges_new, dex = d->dex, unl = d->unlocked; uint16_t run = d->run;
+    uint32_t dna = d->dna, badges = d->badges, nb = d->badges_new, dex = d->dex, unl = d->unlocked, hints = d->hints; uint16_t run = d->run;
+    uint16_t qw = d->quests_won, ww = d->waves_won;
     bool over = d->run_over;
     dish_init(d, seed, pet, pet_name);
-    d->dna = dna; d->badges = badges; d->badges_new = nb; d->dex = dex; d->unlocked = unl;
+    d->dna = dna; d->badges = badges; d->badges_new = nb; d->dex = dex; d->unlocked = unl; d->hints = hints;
+    d->quests_won = qw; d->waves_won = ww;
     d->run = over ? run + 1 : run ? run : 1;      /* (the very first setup is run 1, not a second run) */
     d->run_dna0 = dna;
 }
 
 /* ---- the keeper's hands ---- */
+void dish_poke(dish_t *d, int i) {
+    if (i < 0 || i >= DISH_MAX_CELLS || d->cell[i].state != CS_LIVE) return;
+    cell_t *c = &d->cell[i];
+    float a = dish_rand(d, 0, TAU);
+    c->vx += cosf(a) * 60; c->vy += sinf(a) * 60; c->spin += dish_rand(d, -6, 6);
+    part_add(d, PT_RIPPLE, c->x, c->y, 0, 0, 0.5f, 0xBFE8FF);
+}
+void dish_flick(dish_t *d, int i, float vx, float vy) {
+    if (i < 0 || i >= DISH_MAX_CELLS || d->cell[i].state != CS_LIVE) return;
+    cell_t *c = &d->cell[i];
+    float sp = sqrtf(vx * vx + vy * vy), mx = 700;
+    if (sp > mx) { vx *= mx / sp; vy *= mx / sp; }
+    c->vx = vx; c->vy = vy; c->stun_t = fmaxf(c->stun_t, 0.7f); c->tether = 0; c->host = 0;
+    if (c->strain != DISH_PET && !SPECIES_FRIENDLY[c->species]) d->flicks++;
+    for (int k = 0; k < 4; k++) part_add(d, PT_SPARK, c->x, c->y, -vx * 0.1f + dish_rand(d, -20, 20), -vy * 0.1f + dish_rand(d, -20, 20), 0.4f, 0xFFFFFF);
+}
+int dish_wall_begin(dish_t *d, float x, float y) {
+    if (d->ink < 1) return -1;
+    int w = 0;
+    for (int k = 1; k < DISH_WALLS; k++) if (d->wall[k].t < d->wall[w].t) w = k;   /* a free slot, or the oldest */
+    d->ink -= 1;
+    d->wall[w].n = 1; d->wall[w].t = DISH_WALL_LIFE; d->wall[w].x[0] = x; d->wall[w].y[0] = y;
+    return w;
+}
+void dish_wall_add(dish_t *d, int w, float x, float y) {
+    if (w < 0 || w >= DISH_WALLS || d->wall[w].t <= 0) return;
+    int n = d->wall[w].n;
+    if (n >= DISH_WALL_PTS) return;
+    float dx = x - d->wall[w].x[n - 1], dy = y - d->wall[w].y[n - 1];
+    if (dx * dx + dy * dy < 9 * 9) return;           /* (a point every 9 px: 24 points draw a ~200 px wall) */
+    d->wall[w].x[n] = x; d->wall[w].y[n] = y; d->wall[w].n = (uint8_t)(n + 1);
+}
 void dish_feed(dish_t *d, float x, float y, float amount) {
     if (!dish_inside(x, y, 6)) return;
     splat(d->nutr, x, y, amount * 0.9f, 26, 1.0f);
@@ -704,6 +742,7 @@ static void cell_tick(dish_t *d, int i, float dt) {
                 if (dd2 < 1e-4f) { dx = dish_rand(d, -1, 1); dy = dish_rand(d, -1, 1); dd2 = dx * dx + dy * dy + 1e-4f; }
                 float dd = sqrtf(dd2);
                 bool touch = dd < rr + 1, other = o->strain != c->strain;
+                if (touch && other) { int a = c->strain < o->strain ? c->strain : o->strain, b = c->strain ^ o->strain ^ a; d->met |= 1ull << (a * DISH_MAX_STRAINS + b); }
                 bool aimed = tgt < 0 || o->strain == tgt;                     /* (a hunt aims at its target strain) */
                 if (touch && !o_virus) touching++;
                 if (!other && !o_virus && mu[M_SWARM] && dd < 40) { ax += cosf(o->ang); ay += sinf(o->ang); flock++; }
@@ -803,6 +842,23 @@ static void cell_tick(dish_t *d, int i, float dt) {
     if (sp->adhesive) c->ang += dish_rand(d, -0.3f, 0.3f) * dt;
     if (c->jet_t > 0 && !(c->id & 3)) part_add(d, PT_SPARK, c->x, c->y, -c->vx * 0.2f, -c->vy * 0.2f, 0.3f, 0xBFEFFF);   /* a jet's streak */
 
+    /* the keeper's walls: nothing crosses one */
+    for (int w = 0; w < DISH_WALLS; w++) {
+        if (d->wall[w].t <= 0 || d->wall[w].n < 2) continue;
+        for (int k = 0; k + 1 < d->wall[w].n; k++) {
+            float ax = d->wall[w].x[k], ay = d->wall[w].y[k], bx = d->wall[w].x[k + 1], by = d->wall[w].y[k + 1];
+            float vx = bx - ax, vy = by - ay, t = ((c->x - ax) * vx + (c->y - ay) * vy) / (vx * vx + vy * vy + 1e-6f);
+            t = clampf(t, 0, 1);
+            float qx = c->x - (ax + vx * t), qy = c->y - (ay + vy * t), q = sqrtf(qx * qx + qy * qy), need = r + 3;
+            if (q >= need) continue;
+            if (q < 1e-3f) { qx = -vy; qy = vx; q = sqrtf(qx * qx + qy * qy) + 1e-6f; }
+            float nx = qx / q, ny = qy / q;
+            c->x += nx * (need - q); c->y += ny * (need - q);
+            float dot = c->vx * nx + c->vy * ny;
+            if (dot < 0) { c->vx -= 2 * dot * nx; c->vy -= 2 * dot * ny; }
+            if (c->strain != DISH_PET && !SPECIES_FRIENDLY[c->species] && d->wall_hits < 60000) d->wall_hits++;
+        }
+    }
     /* the glass: back inside, heading turned in */
     if (!dish_inside(c->x, c->y, r + 2)) {
         float nx, ny; dish_edge_normal(c->x, c->y, &nx, &ny);
@@ -900,7 +956,7 @@ static void strains_tick(dish_t *d, float dt, dish_brain_fn brain) {
                 if (d->run_muts) d->vault_used = 1;
                 seed_colony(d, s, 5, DISH_CX, DISH_CY, 12, &st->vault);
                 splat(d->nutr, DISH_CX, DISH_CY, 0.35f, 24, 1.0f);    /* the vault wakes them on a little food */
-                st->strat = (strat_t){ ST_FORAGE, -1, 5, 1 };
+                st->strat = (strat_t){ ST_FORAGE, -1, 5, 1, 0 };
                 dish_story_note(d, SE_COMEBACK, st->species, 0, d->vault_used, 0);
                 emit(DEV_RESPAWN, s);
             }
@@ -1013,6 +1069,22 @@ void dish_tick(dish_t *d, float dt, dish_brain_fn brain) {
     if (d->uv_t > 0) d->uv_t -= dt;
     if (d->scare_t > 0) d->scare_t -= dt;
     parts_tick(d, dt);
+    /* meetings: two strains whose cells touched talk, now and then (the story keeps a pet's first in a while) */
+    for (int a = 0; a < DISH_MAX_STRAINS; a++)
+        for (int b = a + 1; b < DISH_MAX_STRAINS; b++) {
+            float *cd = &d->meet_cd[a][b];
+            if (*cd > -60) *cd -= dt;
+            if (!(d->met >> (a * DISH_MAX_STRAINS + b) & 1) || *cd > 0 || !d->strain[a].used || !d->strain[b].used) continue;
+            if (a == DISH_PET && *cd <= -48) {
+                int sp = ST_TARGETED(d->strain[a].strat.id) && d->strain[a].strat.target == b ? a : b, o = sp == a ? b : a;
+                dish_story_note(d, SE_SAID, d->strain[sp].species, d->strain[o].species, d->strain[sp].strat.say, (uint16_t)(sp == DISH_PET ? 1 : 0) | (uint16_t)(dish_say_variant(d, sp) << 4));
+            }
+            *cd = 12;
+            emit(DEV_MEET, a * 8 + b);
+        }
+    d->met = 0;
+    for (int w = 0; w < DISH_WALLS; w++) if (d->wall[w].t > 0) d->wall[w].t -= dt;
+    d->ink = fminf(DISH_WALLS, d->ink + dt / 12.0f);
     dish_prog_tick(d, dt);
     dish_story_tick(d, dt);
     if (d->gift_cd > 0) d->gift_cd -= dt;          /* (visitors, the phages among them, come from the director: dish_prog.c) */
@@ -1043,7 +1115,7 @@ static const float GLO[GENES] = { 0.5f, 0.75f, 0, 0, 0, 0, 0, 0.6f, 0 }, GHI[GEN
 
 size_t dish_save(const dish_t *d, uint8_t *out, size_t cap) {
     wbuf_t w = { out, 0, cap, true };
-    uint32_t magic = SAVE_MAGIC; uint16_t ver = 6;   /* v2 (phase 3): pH, salt, ph_opt - nothing shipped v1, so it is refused; v3: progression at the tail;
+    uint32_t magic = SAVE_MAGIC; uint16_t ver = 7;   /* v2 (phase 3): pH, salt, ph_opt - nothing shipped v1, so it is refused; v3: progression at the tail;
                                                        v4: each cell's age, and the badges' trackers; v5: the builds, the run, the draft;
                                                        v6: the 16 behaviour mutations (the 30 of v5 are gone), and the story */
     w_bytes(&w, &magic, 4); w_bytes(&w, &ver, 2);
@@ -1087,6 +1159,8 @@ size_t dish_save(const dish_t *d, uint8_t *out, size_t cap) {
     w_bytes(&w, &d->log_head, 2); w_bytes(&w, &d->log_n, 2); w_bytes(&w, d->log, sizeof d->log);
     w_bytes(&w, &d->series_head, 2); w_bytes(&w, &d->series_n, 2); w_bytes(&w, d->series, sizeof d->series);
     w_bytes(&w, &d->run_t, 4); w_bytes(&w, &d->best_count, 2);
+    /* v7: the hints shown, the quests and waves won */
+    w_bytes(&w, &d->hints, 4); w_bytes(&w, &d->quests_won, 2); w_bytes(&w, &d->waves_won, 2);
     return w.ok ? w.n : 0;
 }
 
@@ -1104,7 +1178,7 @@ bool dish_load(dish_t *d, const uint8_t *in, size_t len, uint32_t seed) {
     const int muts_saved = ver >= 6 ? DISH_MUT_N : 30;   /* (v5 kept 30 stat mutations per strain) */
     const size_t tail5 = DISH_MAX_STRAINS * (4 + muts_saved) + 2 + 2 + 4 + 8 + 4 + 4 + 4;
     const size_t tail6 = 4 + sizeof d->log + 4 + sizeof d->series + 4 + 2;
-    size_t tail = (ver >= 6 ? tail6 : 0) + (ver >= 5 ? tail5 : 0) + (ver >= 4 ? 24 + 2 : ver >= 3 ? 24 : 0);
+    size_t tail = (ver >= 7 ? 8 : 0) + (ver >= 6 ? tail6 : 0) + (ver >= 5 ? tail5 : 0) + (ver >= 4 ? 24 + 2 : ver >= 3 ? 24 : 0);
     if (nc > DISH_MAX_CELLS || len != n_at + 2 + nc * cell_b + tail || !in[6 + 21]) return false;   /* (+27: strain 0 used) */
     dish_t *dp = d;
     #define nd (*dp)
@@ -1122,7 +1196,7 @@ bool dish_load(dish_t *d, const uint8_t *in, size_t len, uint32_t seed) {
         r_bytes(&r, &st->extinct_t, 4); r_bytes(&r, &st->births, 4); r_bytes(&r, &st->deaths, 4); r_bytes(&r, &st->max_gen, 4);
         r_bytes(&r, &st->vault, sizeof st->vault);
         st->used = used; st->species = sp < SP_COUNT ? sp : 0;
-        st->strat = (strat_t){ (uint8_t)(strat < ST_COUNT ? strat : 0), -1, 5, 1 };
+        st->strat = (strat_t){ (uint8_t)(strat < ST_COUNT ? strat : 0), -1, 5, 1, 0 };
         st->other[0] = st->other[1] = st->other[2] = -1;
     }
     for (int c = 0; c < FIELD_N * FIELD_N; c++) { nd.nutr[c] = r_q8(&r, 0, 1); nd.waste[c] = r_q8(&r, 0, 1); nd.drug[c] = r_q8(&r, 0, 1); }
@@ -1173,6 +1247,7 @@ bool dish_load(dish_t *d, const uint8_t *in, size_t len, uint32_t seed) {
             if (nd.series_head >= SN || nd.series_n > SN) nd.series_head = nd.series_n = 0;
             nd.run_t = fin(nd.run_t, 0, 1e8f, 0);
         }
+        if (ver >= 7) { r_bytes(&r, &nd.hints, 4); r_bytes(&r, &nd.quests_won, 2); r_bytes(&r, &nd.waves_won, 2); }
         if (nd.run_t == 0) nd.run_t = 1;              /* (a loaded dish is no new run: no START line) */
         nd.visit_t = fin(nd.visit_t, 0, 3600, 120); nd.gift_cd = fin(nd.gift_cd, 0, GIFT_CD, 0);
     } else {                                        /* a save from before runs: run 1, its draft due at the next 8 generations,
@@ -1193,6 +1268,7 @@ bool dish_load(dish_t *d, const uint8_t *in, size_t len, uint32_t seed) {
         for (int k = 0; k < GENES; k++)
             if (!(g[k] >= GLO[k] && g[k] <= GHI[k])) { st->vault = dish_species_genome((species_t)st->species); break; }
     }
+    nd.ink = DISH_WALLS; nd.quest_cd = 20; nd.wave_cd = 240;   /* (walls, quests and waves are not saved: a loaded dish starts them fresh) */
     #undef nd
     return r.ok;
 }

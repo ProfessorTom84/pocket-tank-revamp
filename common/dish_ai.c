@@ -2,6 +2,7 @@
 #include "dish_ai.h"
 #include "llm/q4_model.h"
 #include "llm/word_tok.h"
+#include "dish_talk.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,7 +12,7 @@
 static q4_model_t *g_m;
 static word_tok_t g_tok;
 static bool g_ok;
-static int g_goal[ST_COUNT], g_tgt[4], g_dig[10], g_urg;   /* the answer words' token ids (g_tgt: other1..3, none) */
+static int g_goal[ST_COUNT], g_tgt[4], g_dig[10], g_urg, g_sayw, g_say[SAY_COUNT];   /* the answer words' token ids (g_tgt: other1..3, none) */
 static void nolock(void) {}
 static void (*g_lock)(void) = nolock, (*g_unlock)(void) = nolock;
 int64_t (*dish_ai_clock_us)(void);
@@ -45,7 +46,8 @@ bool dish_ai_open(const uint8_t *model, size_t model_len, const uint8_t *tok, si
     static const char *const T[4] = { "other1", "other2", "other3", "none" };
     for (int k = 0; k < 4; k++) if (!(g_tgt[k] = tok_of(T[k]))) return false;
     for (int k = 0; k < 10; k++) { char b[4]; snprintf(b, sizeof b, "%d", k); if (!(g_dig[k] = tok_of(b))) return false; }
-    if (!(g_urg = tok_of("urgency"))) return false;
+    if (!(g_urg = tok_of("urgency")) || !(g_sayw = tok_of("say"))) return false;
+    for (int k = 0; k < SAY_COUNT; k++) if (!(g_say[k] = tok_of(SAY_WORDS[k]))) return false;
     memset(g_slot, 0, sizeof g_slot);
     g_ok = true;
     return true;
@@ -65,7 +67,7 @@ bool dish_ai_decide(const char *line, const int8_t other[3], strat_t *out) {
     snprintf(buf, sizeof buf, "%s ->", line);
     int toks[96], n = word_tok_encode(&g_tok, buf, toks, 96);
     const q4_config_t *c = q4_model_config(g_m);
-    if (n < 3 || n + 4 >= c->seq_len) return false;
+    if (n < 3 || n + 6 >= c->seq_len) return false;
     int64_t t0 = dish_ai_clock_us ? dish_ai_clock_us() : 0;
     float *lg = q4_model_prefill(g_m, toks, n);
     if (!lg) for (int p = 0; p < n; p++) if (!(lg = q4_model_forward(g_m, toks[p], p))) return false;
@@ -76,10 +78,14 @@ bool dish_ai_decide(const char *line, const int8_t other[3], strat_t *out) {
     if (!q4_model_forward(g_m, g_tgt[t], n + 1)) return false;
     if (!(lg = q4_model_forward(g_m, g_urg, n + 2))) return false;    /* "urgency" is always the next word */
     int u = pick(lg, g_dig, 10, NULL);
+    if (!q4_model_forward(g_m, g_dig[u], n + 3)) return false;
+    if (!(lg = q4_model_forward(g_m, g_sayw, n + 4))) return false;     /* "say", then what it says */
+    int say = pick(lg, g_say, SAY_COUNT, NULL);
     out->id = (uint8_t)g;
     out->target = (int8_t)(t < 3 ? other[t] : -1);
     out->urgency = (float)u;
     out->confidence = sure;
+    out->say = (uint8_t)say;
     if (dish_ai_clock_us) {
         float ms = (dish_ai_clock_us() - t0) / 1000.0f;
         g_st.ms_mean = g_st.answered ? g_st.ms_mean * 0.9f + ms * 0.1f : ms;

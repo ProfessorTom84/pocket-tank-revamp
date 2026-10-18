@@ -11,7 +11,7 @@
 
 /* a = the actor's species, b = the other's species, v = a goal or a mutation, x = a number */
 enum { SE_START, SE_VISIT, SE_LEAVE, SE_WIPED, SE_DECIDE, SE_MUT, SE_EXTINCT, SE_COMEBACK, SE_RUN_OVER,
-       SE_RECORD, SE_BLOOM, SE_ZAP, SE_TAMED, SE_GIFT, SE_LOSS, SE_COUNT };
+       SE_RECORD, SE_BLOOM, SE_ZAP, SE_TAMED, SE_GIFT, SE_LOSS, SE_SAID, SE_QUEST, SE_WAVE, SE_COUNT };
 
 void dish_story_note(dish_t *d, int type, int a, int b, int v, uint16_t x);
 void dish_story_death(dish_t *d, int strain, int cause);

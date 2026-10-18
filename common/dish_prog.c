@@ -1,6 +1,7 @@
 /* dish_prog.c — see dish_prog.h. */
 #include "dish_prog.h"
 #include "dish_mut.h"
+#include "dish_quest.h"
 #include <math.h>
 
 const char *const BADGE_NAMES[BADGE_COUNT] = {
@@ -48,6 +49,7 @@ static void award(dish_t *d, int b) {
 }
 
 void dish_prog_tick(dish_t *d, float dt) {
+    dish_quest_tick(d, dt);
     if (d->care_cd > 0) d->care_cd -= dt;
     const strain_t *pet = &d->strain[DISH_PET];
     /* the pet's divisions pay: one DNA for every four */

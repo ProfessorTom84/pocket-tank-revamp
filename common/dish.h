@@ -53,6 +53,9 @@
 #define FIELD_N          32     /* the nutrient / waste / flow / drug grids are FIELD_N x FIELD_N over the frame */
 #define DISH_PET         0      /* strain 0 is always the keeper's */
 #define DISH_DIV_TIME    2.6f   /* seconds a cell takes to pinch in two */
+#define DISH_WALLS       3      /* walls standing at once */
+#define DISH_WALL_PTS    24
+#define DISH_WALL_LIFE   20.0f
 #define DISH_DRAFT_GENS  2      /* a mutation draft every this many generations: a lazily kept strain makes
                                    ~0.3 a minute, so a card every 6-7 minutes */
 
@@ -70,7 +73,7 @@ extern const char *const STRAT_NAMES[ST_COUNT];
 #define ST_TARGETED(g) ((g) >= ST_HUNT)
 
 /* a decision: the goal, the strain it is about (-1 none), how urgent, how sure (the AI's softmax) */
-typedef struct { uint8_t id; int8_t target; float urgency, confidence; } strat_t;
+typedef struct { uint8_t id; int8_t target; float urgency, confidence; uint8_t say; } strat_t;   /* say: what it says about it (dish_talk.h) */
 
 /* how a cell died (the story's causes) */
 enum { DIE_STARVED, DIE_EATEN, DIE_VIRUS, DIE_POISON, DIE_HARSH, DIE_OLD, DIE_COUNT };
@@ -186,6 +189,21 @@ typedef struct {
     float run_t;                  /* seconds of this run */
     uint16_t m_births, m_deaths[DIE_COUNT];   /* the minute so far */
     uint16_t best_count;
+    /* meetings: which strains touched this tick (a bit per pair), and when a pair may talk again */
+    uint64_t met;
+    float meet_cd[DISH_MAX_STRAINS][DISH_MAX_STRAINS];
+    /* the keeper's walls: drawn with a finger, they stand DISH_WALL_LIFE seconds; the ink refills */
+    struct { uint8_t n; float t; float x[DISH_WALL_PTS], y[DISH_WALL_PTS]; } wall[DISH_WALLS];
+    float ink;                    /* walls left to draw, 0..DISH_WALLS (fractional: refilling) */
+    uint16_t wall_hits, flicks;   /* foreign cells stopped by a wall, flicked away (the quests count them) */
+    /* the quest: what the colony asks for now (dish_quest.c) */
+    struct { uint8_t kind, state; int8_t who; float t, limit, prog, goal, x, y; uint16_t reward, lost0; } quest;
+    float quest_cd;
+    /* defend the dish: a wave announced from one side, then fought (dish_quest.c) */
+    struct { uint8_t on; int8_t side, strain; float t; uint16_t lost0; } wave;
+    float wave_cd;
+    uint16_t quests_won, waves_won;
+    uint32_t hints;               /* first-time hints already shown (dish_ui.c), saved */
 } dish_t;
 
 typedef strat_t (*dish_brain_fn)(const dish_t *d, int strain);
@@ -217,6 +235,10 @@ void dish_uv(dish_t *d, float seconds);                      /* the UV lamp: mor
 void dish_light(dish_t *d, float x, float y, float dt);     /* a finger held on the glass is light: food blooms under it */
 void dish_set_tilt(dish_t *d, float x, float y);            /* which way is down (-1..1): everything drifts that way */
 float dish_light_at(const dish_t *d, float x, float y);      /* the lamp and the finger's light at a point */
+void dish_poke(dish_t *d, int cell);                         /* a tap on a germ: it jumps */
+void dish_flick(dish_t *d, int cell, float vx, float vy);    /* a flick: the germ is thrown (px/s) */
+int  dish_wall_begin(dish_t *d, float x, float y);           /* a new wall (-1: out of ink) */
+void dish_wall_add(dish_t *d, int w, float x, float y);      /* the finger moved on: the wall follows */
 bool dish_cell_anchor(const dish_t *d, const cell_t *c);     /* a biofilm wall's anchor */
 bool dish_cell_scout(const dish_t *d, const cell_t *c);      /* one of the strain's scouts */
 int  dish_add_sample(dish_t *d, species_t sp);               /* a new colony mid-dish (-1: no room, or already here) */
@@ -238,7 +260,9 @@ float dish_cell_radius(const cell_t *c);
 
 /* events (sounds are feedback, never behavior: one listener, may only enqueue) */
 enum { DEV_FEED, DEV_DIVIDE, DEV_POP, DEV_BURST, DEV_INFECT, DEV_EXTINCT, DEV_RESPAWN, DEV_OUTBREAK, DEV_STRAT, DEV_BADGE,
-       DEV_VISIT, DEV_VISIT_GONE, DEV_GIFT, DEV_DRAFT, DEV_RUN_OVER, DEV_ZAP, DEV_BLOOM, DEV_COUNT };
+       DEV_VISIT, DEV_VISIT_GONE, DEV_GIFT, DEV_DRAFT, DEV_RUN_OVER, DEV_ZAP, DEV_BLOOM, DEV_MEET, DEV_QUEST, DEV_WAVE, DEV_COUNT };
+/* DEV_MEET: strain = a * 8 + b, two strains whose cells touched (they talk); DEV_QUEST: strain = the quest's state;
+ * DEV_WAVE: strain = 1 announced, 2 begun, 3 over */
 /* DEV_BADGE: strain = the badge; DEV_VISIT / DEV_VISIT_GONE: strain = the species; DEV_GIFT: a free card (gene transfer) */
 typedef void (*dish_event_fn)(int ev, int strain, void *ud);
 void dish_events_set(dish_event_fn fn, void *ud);

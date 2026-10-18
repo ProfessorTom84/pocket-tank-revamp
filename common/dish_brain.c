@@ -11,6 +11,7 @@
  * dish_lexicon lists every word in it for the tokenizer: one source, no drift. */
 #include "dish.h"
 #include "dish_mut.h"
+#include "dish_talk.h"
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
@@ -71,12 +72,13 @@ int dish_lexicon(const char **out, int cap) {
         "kind", "role", "count", "energy", "health", "comfort", "crowd", "traits", "light",
         "other1", "other2", "other3", "time", "last", "urgency", "->",
         "pet", "friend", "threat", "rival", "none", "one", "few", "some", "many", "swarm",
-        "near", "mid", "far", "me", "them", "day", "night",
+        "near", "mid", "far", "me", "them", "day", "night", "say",
         "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12" };
     int n = 0;
     for (size_t i = 0; i < sizeof FIXED / sizeof FIXED[0] && n < cap; i++) out[n++] = FIXED[i];
     for (int sp = 0; sp < SP_COUNT && n < cap; sp++) out[n++] = SPECIES_NAMES[sp];
     for (int g = 0; g < ST_COUNT && n < cap; g++) out[n++] = STRAT_NAMES[g];
+    for (int k = 0; k < SAY_COUNT && n < cap; k++) out[n++] = SAY_WORDS[k];
     for (int m = 0; m < DISH_MUT_N; m++)
         for (int tier = 1; tier <= 3 && n < cap; tier++) {
             snprintf(trait_words[m * 3 + tier - 1], sizeof trait_words[0], "%s%d", MUTS[m].word, tier);
@@ -88,7 +90,7 @@ int dish_lexicon(const char **out, int cap) {
 /* ---- the rules: the same goals and targets, chosen by hand ---- */
 static bool predator_kind(int sp) { return sp == SP_MYXO || sp == SP_VIBRIO; }
 static bool fights(const uint8_t *m) { return m[M_ENGULF] || m[M_GRAPPLE] || m[M_TOXIN] >= 2 || m[M_ZAP] >= 2 || m[M_SPIKES] >= 2; }
-static strat_t pick(int g, int target, float urg) { strat_t r = { (uint8_t)g, (int8_t)target, urg, 1 }; return r; }
+static strat_t pick(int g, int target, float urg) { strat_t r = { (uint8_t)g, (int8_t)target, urg, 1, 0 }; return r; }
 /* what the nearest-first others are, for the tests below */
 enum { IS_ANY, IS_PET, IS_FRIEND, IS_PREYABLE, IS_HOSTILE, IS_BAD_FOR_CILIATE, IS_THREAT_TO };
 static bool is(const dish_t *d, int s, int x, int what) {
@@ -112,7 +114,7 @@ static int first(const dish_t *d, int s, int what) {
     return -1;
 }
 
-strat_t dish_brain_rules(const dish_t *d, int s) {
+static strat_t rules_goal(const dish_t *d, int s) {
     const strain_t *st = &d->strain[s];
     int sp = st->species;
     if (sp == SP_PHAGE) { int t = first(d, s, IS_HOSTILE); return pick(ST_HUNT, t >= 0 ? t : first(d, s, IS_ANY), 6); }
@@ -160,4 +162,11 @@ strat_t dish_brain_rules(const dish_t *d, int s) {
     if (!d->light && st->energy > 0.3f) return pick(ST_REST, -1, 2);
     if (st->energy > 0.75f) return pick(ST_DIVIDE, -1, 4);
     return pick(m[M_SWARM] ? ST_CLUSTER : ST_FORAGE, -1, 4);
+}
+
+/* the rules' decision, and what the strain says about it (the AI answers both itself) */
+strat_t dish_brain_rules(const dish_t *d, int s) {
+    strat_t r = rules_goal(d, s);
+    r.say = dish_say_rules(d, s, r.id, r.target);
+    return r;
 }

@@ -1,6 +1,8 @@
 /* dish_story.c — see dish_story.h. */
 #include "dish_story.h"
 #include "dish_mut.h"
+#include "dish_talk.h"
+#include "dish_quest.h"
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
@@ -108,6 +110,14 @@ bool dish_story_line(const dish_t *d, int i, char *out, int n, int *minute) {
     case SE_TAMED: snprintf(out, (size_t)n, "%s TAMED A VIRUS. IT FIGHTS FOR THEM NOW.", pet); break;
     case SE_GIFT: snprintf(out, (size_t)n, "A GENE GIFT: A FREE MUTATION."); break;
     case SE_LOSS: snprintf(out, (size_t)n, "%s LOST %d CELLS TO %s.", pet, x, v < DIE_COUNT ? DIE_NAMES[v] : "SOMETHING"); break;
+    case SE_SAID: {
+        char said[72];
+        dish_say_text(v, x >> 4, x & 1 ? B : pet, said, sizeof said);
+        if (x & 1) snprintf(out, (size_t)n, "%s SAID TO THE %sS: '%s'", pet, B, said);
+        else snprintf(out, (size_t)n, "THE %sS SAID TO %s: '%s'", A, pet, said);
+        break; }
+    case SE_QUEST: snprintf(out, (size_t)n, x ? "%s ASKED: %s. DONE!" : "%s ASKED: %s. NOT THIS TIME.", pet, dish_quest_name(v)); break;
+    case SE_WAVE: snprintf(out, (size_t)n, v ? "%s HELD OFF A WAVE OF %sS, LOSING %d." : "A WAVE OF %sS BROKE THROUGH. %s LOST %d.", v ? pet : A, v ? A : pet, x); break;
     default: snprintf(out, (size_t)n, "SOMETHING HAPPENED."); break;
     }
     return true;

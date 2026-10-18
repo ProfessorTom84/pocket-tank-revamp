@@ -12,6 +12,8 @@
 #include "dish_mut.h"
 #include "dish_story.h"
 #include "dish_ai.h"
+#include "dish_talk.h"
+#include "dish_quest.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -151,6 +153,7 @@ static void bare_spot(float *x, float *y) {
     *x = 30; *y = DISH_CY;
 }
 /* the pet's cell nearest its colony's middle (away from the corner buttons) */
+static void quiet_ui(void) { for (int k = 0; k < DISH_BUBBLES; k++) ui.bub[k].strain = -1; ui.info_t = 0; }   /* (no bubble or hint over what a test taps) */
 static int pet_cell(void) {
     int best = -1; float bd = 1e9f; const strain_t *p = &dish.strain[DISH_PET];
     for (int i = 0; i < DISH_MAX_CELLS; i++) {
@@ -171,6 +174,21 @@ static int snapshot(const char *pre) {
     run(&dish, 25, 25, false);
     ui.toast_t = 0;
     shot(pre, "dish");
+    {   /* the new play: a meeting's talk, a hint pointing, a wall, a quest's ring, a wave coming */
+        int vs = -1; for (int k = 1; k < DISH_MAX_STRAINS; k++) if (dish.strain[k].used && dish.strain[k].species == SP_VIBRIO) vs = k;
+        if (vs >= 0) for (int i = 0; i < DISH_MAX_CELLS; i++) if (dish.cell[i].strain == vs && dish.cell[i].state == CS_LIVE) { dish.cell[i].x = dish.strain[DISH_PET].cx + 8; dish.cell[i].y = dish.strain[DISH_PET].cy; }
+        ui.info_t = 0; run(&dish, 1.8f, 0, false); ui.info_t = 0; shot(pre, "talk");
+        dish.hints &= ~(1u << HINT_WALL); ui.hint_cd = 0; ui.info_t = 0; run(&dish, 0.1f, 0, false); shot(pre, "hint");
+        ui.info_t = 0; tap_hs(HS_WALL);
+        dish_ui_touch(&ui, &dish, DISH_CX - 80, DISH_CY + 60, true);
+        for (int k = 1; k <= 16; k++) dish_ui_touch(&ui, &dish, DISH_CX - 80 + k * 10, DISH_CY + 60 - k * 4, true);
+        dish_ui_touch(&ui, &dish, DISH_CX + 80, DISH_CY - 4, false);
+        run(&dish, 0.5f, 0, false); shot(pre, "wall");
+        dish_quest_start(&dish, Q_HERD); ui.info_t = 0; run(&dish, 0.3f, 0, false); shot(pre, "quest");
+        dish.quest.state = QS_NONE; dish.quest_cd = 1e9f;
+        dish_wave_start(&dish, 1, SP_PHAGE); run(&dish, 1.5f, 0, false); ui.info_t = 0; shot(pre, "wave");
+        run(&dish, WAVE_WARN_S + WAVE_FIGHT_S, 20, false); dish.wave_cd = 1e9f;
+    }
     /* the light: a finger held on the agar */
     {   float x, y; bare_spot(&x, &y);
         dish_ui_touch(&ui, &dish, x, y, true); run(&dish, 1.2f, 0, false); shot(pre, "light"); dish_ui_touch(&ui, &dish, x, y, false); }
@@ -253,7 +271,7 @@ static int selftest_pet(void) {
     /* TAP a germ: the lens, and its thought */
     run(&dish, 0.5f, 0, false);
     int c = pet_cell();
-    ui.tap_t = 9;
+    ui.tap_t = 9; quiet_ui();
     if (c >= 0) tap_at(dish.cell[c].x, dish.cell[c].y);
     CHECK(c >= 0 && ui.lens == c, "a tap on a germ did not look at it");
     {   char t[64]; dish_ui_thought(&dish, DISH_PET, t, sizeof t);
@@ -261,10 +279,12 @@ static int selftest_pet(void) {
     /* DOUBLE-TAP: the lamp */
     run(&dish, 1, 0, false); bare_spot(&x, &y);
     bool lamp = dish.light;
-    tap_at(x, y); run(&dish, 0.1f, 0, false); tap_at(x + 3, y);
+    quiet_ui(); ui.chat_cd = 1e9f;
+    tap_at(x, y); run(&dish, 0.1f, 0, false); quiet_ui(); tap_at(x + 3, y);
     CHECK(dish.light != lamp, "a double-tap did not switch the lamp");
-    run(&dish, 1, 0, false); tap_at(x, y);
+    run(&dish, 1, 0, false); quiet_ui(); tap_at(x, y);
     CHECK(dish.light != lamp, "a single tap switched the lamp");
+    ui.chat_cd = 5;
     dish.light = true;
     /* the corners: STORY and DISH */
     run(&dish, 1, 0, false); while (dish_ui_take_sound(&ui, &pitch) >= 0) {}
@@ -670,7 +690,9 @@ static int selftest_visitors(void) {
         if (di >= 0 && pi >= 0) { dish.cell[di].x = dish.cell[pi].x + 4; dish.cell[di].y = dish.cell[pi].y; run(&dish, 0.2f, 0, false); }
         CHECK(dish.drafts == 1 && ev_count[DEV_GIFT] == g0 + 1 && ui.page == PAGE_DRAFT, "touching the donor gave no free card");
         tap_hs(HS_DRAFT_0); auto_pick = true; }
-    {   FRESH(77); unsigned dead0 = dish.strain[DISH_PET].deaths; dish_visit(&dish, SP_VIBRIO); run(&dish, 90, 10, false);
+    {   FRESH(77); unsigned dead0 = dish.strain[DISH_PET].deaths; int vb = dish_visit(&dish, SP_VIBRIO);
+        for (int i = 0; i < DISH_MAX_CELLS; i++) if (dish.cell[i].strain == vb && dish.cell[i].state == CS_LIVE) { dish.cell[i].x = dish.strain[DISH_PET].cx + 30; dish.cell[i].y = dish.strain[DISH_PET].cy; }   /* (in reach: no luck involved) */
+        run(&dish, 90, 10, false);
         CHECK(dish.strain[DISH_PET].deaths > dead0, "the vibrio hunted nothing"); }
     /* a visitor whose time is up leaves, frees its slot, and the story says so */
     {   FRESH(78); int vs = dish_visit(&dish, SP_HALO); int gone0 = ev_count[DEV_VISIT_GONE];
@@ -702,7 +724,7 @@ static strat_t forced_brain(const dish_t *d, int s) {
     if (s != DISH_PET || forced_goal < 0) return r;
     int t = -1;
     for (int q = 0; q < 3 && t < 0; q++) { int o = d->strain[s].other[q]; if (o >= 0 && d->strain[o].used && d->strain[o].species == SP_VIBRIO) t = o; }
-    return (strat_t){ (uint8_t)forced_goal, (int8_t)(ST_TARGETED(forced_goal) ? t : -1), 6, 1 };
+    return (strat_t){ (uint8_t)forced_goal, (int8_t)(ST_TARGETED(forced_goal) ? t : -1), 6, 1, r.say };
 }
 typedef struct { int stunned, tethers, jets, anchors, scouts, bloomed, tamed, burst; float pet_e, pet_h, vib_h, align, vib_dist, pet_sum; int vib_dead, pet_dead; } rig_t;
 /* a bacillus colony with a vibrio pack beside it and phages about: `seconds` with mutation m at tier 3 (-1 none) */
@@ -841,13 +863,14 @@ static int selftest_mind(void) {
         CHECK(dish_story_samples(&dish) >= 1, "no minute samples in the story"); }
     {   /* every event type reads as a sentence */
         static dish_t s; dish_init(&s, 5, SP_COCCUS, "DOT"); s.log_n = 0; s.log_head = 0;
-        for (int t = SE_START; t <= SE_LOSS; t++) dish_story_note(&s, t, SP_VIBRIO, SP_COCCUS, t == SE_MUT ? M_ZAP : t == SE_DECIDE ? ST_HUNT : 1, 3);
+        for (int t = SE_START; t < SE_COUNT; t++) dish_story_note(&s, t, SP_VIBRIO, SP_COCCUS, t == SE_MUT ? M_ZAP : t == SE_DECIDE ? ST_HUNT : 1, 3);
         char l[96]; int mn, ok = 0;
         for (int i = 0; i < dish_story_count(&s); i++) if (dish_story_line(&s, i, l, sizeof l, &mn) && strlen(l) > 8 && !strstr(l, "SOMETHING")) ok++;
-        CHECK(ok == SE_LOSS - SE_START + 1, "only %d of %d event types read as a sentence", ok, SE_LOSS - SE_START + 1); }
+        CHECK(ok == SE_COUNT - SE_START, "only %d of %d event types read as a sentence", ok, SE_COUNT - SE_START); }
     /* the state line: what the AI reads (dish schema v1), every word in the lexicon */
     {   char line[512]; dish_encode(&dish, DISH_PET, line, sizeof line);
         const char *lex[512]; int nl = dish_lexicon(lex, 512), bad = 0, words = 0;
+        for (int a = 0; a < nl; a++) for (int b = a + 1; b < nl; b++) CHECK(strcmp(lex[a], lex[b]), "the lexicon has \"%s\" twice (the tokenizer would disagree)", lex[a]);
         for (char *w = strtok(line, " "); w; w = strtok(NULL, " ")) {
             bool found = false; for (int k = 0; k < nl && !found; k++) found = !strcmp(lex[k], w);
             if (!found) { printf("  not in the lexicon: \"%s\"\n", w); bad++; }
@@ -910,7 +933,7 @@ static int selftest_ai(void) {
         char line[512]; dish_fill_others(&dish, s); dish_encode(&dish, s, line, sizeof line);
         strat_t r; bool ok = dish_ai_decide(line, dish.strain[s].other, &r);
         bool in_others = r.target < 0 || r.target == dish.strain[s].other[0] || r.target == dish.strain[s].other[1] || r.target == dish.strain[s].other[2];
-        CHECK(ok && r.id < ST_COUNT && r.urgency >= 0 && r.urgency <= 9 && r.confidence > 0 && r.confidence <= 1 && in_others && (ST_TARGETED(r.id) || r.target < 0),
+        CHECK(ok && r.say < SAY_COUNT && r.id < ST_COUNT && r.urgency >= 0 && r.urgency <= 9 && r.confidence > 0 && r.confidence <= 1 && in_others && (ST_TARGETED(r.id) || r.target < 0),
               "strain %d: a bad decision (ok %d, goal %d, target %d, urgency %.0f, sure %.2f)", s, ok, r.id, r.target, r.urgency, r.confidence);
     }
     /* the scheduler: the dish asks through the AI, one thought a frame, and every strain gets thought about */
@@ -923,6 +946,107 @@ static int selftest_ai(void) {
     for (int s = 0; s < DISH_MAX_STRAINS; s++)
         if (dish.strain[s].used && dish.strain[s].count) CHECK(dish_ai_answers(s) > 0, "strain %d (%s) was never thought about", s, SPECIES_NAMES[dish.strain[s].species]);
     printf("selftest-ai: %s\n", fails ? "FAILED" : "ok");
+    return fails ? 1 : 0;
+}
+
+/* ---- play: the germs talk, the giant pokes, flicks and builds walls, the colony asks, the dish is attacked ---- */
+static int bubbles_of(int s) { int n = 0; for (int k = 0; k < DISH_BUBBLES; k++) n += ui.bub[k].strain == s && ui.bub[k].text[0]; return n; }
+static int selftest_play(void) {
+    dish_events_set(count_events, NULL);
+    dish_init(&dish, 111, SP_BACILLUS, "BLIP"); dish_ui_init(&ui);
+    dish.run_muts = 1; dish.visit_t = dish.outbreak_t = 1e9f; dish.quest_cd = dish.wave_cd = 1e9f;
+    run(&dish, 6, 0, false);
+    /* hints: the first one comes by itself, once, and the save keeps it */
+    CHECK(dish.hints >> HINT_LIGHT & 1 && ui.info_t > 0 && strstr(ui.info, "LIGHT"), "no first hint about the light (\"%s\")", ui.info);
+    {   static uint8_t buf[DISH_SAVE_MAX]; static dish_t back; size_t n = dish_save(&dish, buf, sizeof buf);
+        CHECK(dish_load(&back, buf, n, 3) && back.hints == dish.hints, "the hints shown did not survive the save");
+        uint32_t h = dish.hints; static dish_t nr; nr = dish; dish_new_run(&nr, 5, SP_COCCUS, "DOT");
+        CHECK(nr.hints == h, "a new run showed the hints again"); }
+    /* talk: a vibrio meets the colony, and both speak; a tap on a bubble says who that is */
+    int vs = dish_visit(&dish, SP_VIBRIO); dish.strain[vs].stay_t = 1e9f;
+    int m0 = ev_count[DEV_MEET];
+    {   int pc = pet_cell();                          /* (right on one of the pet's cells: the colony's middle may be empty) */
+        for (int i = 0; i < DISH_MAX_CELLS; i++) if (pc >= 0 && dish.cell[i].strain == vs && dish.cell[i].state == CS_LIVE) { dish.cell[i].x = dish.cell[pc].x + 5; dish.cell[i].y = dish.cell[pc].y; } }
+    run(&dish, 0.2f, 0, false);
+    CHECK(ev_count[DEV_MEET] > m0, "cells of two strains touched and nobody met");
+    run(&dish, 1.6f, 0, false);
+    CHECK(bubbles_of(vs) + bubbles_of(DISH_PET) >= 1, "a meeting and no one said a word");
+    {   int k = -1; for (int i = 0; i < DISH_BUBBLES; i++) if (ui.bub[i].strain >= 0 && ui.bub[i].delay <= 0) k = i;
+        float bx = 0, by = 0;
+        for (float y = 0; y < DISH_H && k >= 0; y += 3) for (float x = 0; x < DISH_W; x += 3) if (dish_ui_bubble_at(&ui, &dish, x, y) == k) { bx = x; by = y; y = DISH_H; break; }
+        ui.info_t = 0; ui.tap_t = 9;
+        if (k >= 0) tap_at(bx, by);
+        CHECK(k >= 0 && ui.info_t > 0 && strstr(ui.info, "RIGHT NOW"), "a tap on a bubble explained nothing (\"%s\")", ui.info); }
+    /* poke: a tap on a germ - it jumps and answers */
+    quiet_ui(); ui.tap_t = 9;
+    int c = pet_cell();
+    if (c >= 0) { float v0 = hypotf(dish.cell[c].vx, dish.cell[c].vy); tap_at(dish.cell[c].x, dish.cell[c].y);
+        CHECK(bubbles_of(DISH_PET) == 1 && hypotf(dish.cell[c].vx, dish.cell[c].vy) != v0, "a poked germ neither jumped nor answered (%d bubbles, lens %d, speed %.0f -> %.0f)",
+              bubbles_of(DISH_PET), ui.lens, v0, hypotf(dish.cell[c].vx, dish.cell[c].vy)); }
+    /* flick: down on a vibrio, a fast swipe - it flies */
+    quiet_ui(); run(&dish, 1, 0, false);
+    {   int f = -1; for (int i = 0; i < DISH_MAX_CELLS; i++) if (dish.cell[i].strain == vs && dish.cell[i].state == CS_LIVE) f = i;
+        float x0 = f >= 0 ? dish.cell[f].x : 0, y0 = f >= 0 ? dish.cell[f].y : 0, dir = x0 < DISH_CX ? 1 : -1; unsigned fl = dish.flicks;
+        dish_ui_touch(&ui, &dish, x0, y0, true); run(&dish, 0.05f, 0, false);
+        dish_ui_touch(&ui, &dish, x0 + dir * 30, y0, true); run(&dish, 0.05f, 0, false);
+        dish_ui_touch(&ui, &dish, x0 + dir * 60, y0, false);
+        run(&dish, 0.7f, 0, false);
+        CHECK(f >= 0 && (dish.cell[f].x - x0) * dir > 60 && dish.flicks == fl + 1, "a flicked germ went %.0f px", f >= 0 ? (dish.cell[f].x - x0) * dir : 0); }
+    for (int i = 0; i < DISH_MAX_CELLS; i++) if (dish.cell[i].strain == vs) dish.cell[i].state = CS_FREE;   /* (the vibrio, gone) */
+    run(&dish, 0.2f, 0, false);
+    /* walls: the WALL button, a line drawn, and the colony tilted against it can't cross */
+    quiet_ui();
+    for (int i = 0; i < DISH_MAX_CELLS; i++) if (dish.cell[i].strain == DISH_PET && dish.cell[i].state == CS_LIVE) { dish.cell[i].x = DISH_CX - 60 + dish_rand(&dish, -15, 15); dish.cell[i].y = DISH_CY + dish_rand(&dish, -30, 30); }
+    tap_hs(HS_WALL); CHECK(ui.walling, "the WALL button did not arm");
+    dish_ui_touch(&ui, &dish, DISH_CX, DISH_CY - 110, true);
+    for (int k = 1; k <= 22; k++) dish_ui_touch(&ui, &dish, DISH_CX, DISH_CY - 110 + k * 10, true);
+    dish_ui_touch(&ui, &dish, DISH_CX, DISH_CY + 110, false);
+    CHECK(!ui.walling && dish.wall[0].n + dish.wall[1].n + dish.wall[2].n >= 20, "drawing did not make a wall");
+    dish_set_tilt(&dish, 1, 0); run(&dish, 5, 0, false); dish_set_tilt(&dish, 0, 0);
+    {   int over = 0; for (int i = 0; i < DISH_MAX_CELLS; i++) { const cell_t *e = &dish.cell[i]; if (e->strain == DISH_PET && e->state == CS_LIVE && fabsf(e->y - DISH_CY) < 90 && e->x > DISH_CX + 2) over++; }
+        CHECK(over == 0, "%d germs crossed the wall", over); }
+    CHECK(dish_wall_begin(&dish, 10, 10) >= 0 && dish_wall_begin(&dish, 10, 10) >= 0 && dish_wall_begin(&dish, 10, 10) < 0, "the ink did not run out at three walls");
+    run(&dish, DISH_WALL_LIFE + 1, 0, false);
+    CHECK(dish.wall[0].t <= 0 && dish.wall[1].t <= 0 && dish.wall[2].t <= 0, "the walls did not fade");
+    /* quests: the light for a hungry colony pays; the ring is reached by moving them; ignored, one is missed */
+    run(&dish, 1, 0, false);
+    for (int i = 0; i < DISH_MAX_CELLS; i++) if (dish.cell[i].strain == DISH_PET) dish.cell[i].energy = 0.3f;
+    run(&dish, 0.1f, 0, false);
+    unsigned dna0 = dish.dna; dish_quest_start(&dish, Q_LIGHT);
+    CHECK(dish.quest.state == QS_ON, "the light quest did not start");
+    for (float t = 0; t < 8 && dish.quest.state == QS_ON; t += 1 / 30.0f) { dish_light(&dish, dish.strain[DISH_PET].cx, dish.strain[DISH_PET].cy, 1 / 30.0f); dish_tick(&dish, 1 / 30.0f, brain); dish_ui_tick(&ui, &dish, 1 / 30.0f); }
+    CHECK(dish.quest.state == QS_WON && dish.dna >= dna0 + 5, "light on the colony did not win the light quest (state %d)", dish.quest.state);
+    run(&dish, 4, 0, false);
+    dish_quest_start(&dish, Q_HERD);
+    for (int i = 0; i < DISH_MAX_CELLS; i++) if (dish.cell[i].strain == DISH_PET && dish.cell[i].state == CS_LIVE) { dish.cell[i].x = dish.quest.x + dish_rand(&dish, -8, 8); dish.cell[i].y = dish.quest.y + dish_rand(&dish, -8, 8); }
+    run(&dish, 0.3f, 0, false);
+    CHECK(dish.quest.state == QS_WON, "a colony in the ring did not win the ring quest");
+    run(&dish, 4, 0, false);
+    dish_quest_start(&dish, Q_HERD); dish.quest.x = dish.strain[DISH_PET].cx > DISH_CX ? 60 : DISH_W - 60;   /* (far off) */
+    run(&dish, 62, 0, false);
+    CHECK(dish.quest.state == QS_LOST || dish.quest.state == QS_NONE, "an ignored quest was never missed (state %d)", dish.quest.state);
+    {   bool told = false; char l[96]; int mn;
+        for (int i = 0; i < dish_story_count(&dish) && dish_story_line(&dish, i, l, sizeof l, &mn); i++) if (strstr(l, "ASKED")) told = true;
+        CHECK(told, "the quests are not in the story"); }
+    /* the wave: announced from the left, it comes from the left, it ends and is written up */
+    int w0 = ev_count[DEV_WAVE];
+    dish_wave_start(&dish, 0, SP_VIBRIO);
+    run(&dish, WAVE_WARN_S + 0.2f, 0, false);
+    {   float sx = 0; int n = 0; for (int i = 0; i < DISH_MAX_CELLS; i++) if (dish.cell[i].state == CS_LIVE && dish.cell[i].species == SP_VIBRIO) { sx += dish.cell[i].x; n++; }
+        CHECK(n > 0 && sx / n < DISH_CX - DISH_RX * 0.5f, "the wave came from x %.0f, not the left", n ? sx / n : -1); }
+    run(&dish, WAVE_FIGHT_S + 1, 10, false);
+    CHECK(dish.wave.on == WAVE_NONE && ev_count[DEV_WAVE] >= w0 + 3, "the wave never ended");
+    {   bool told = false; char l[96]; int mn;
+        for (int i = 0; i < dish_story_count(&dish) && dish_story_line(&dish, i, l, sizeof l, &mn); i++) if (strstr(l, "WAVE")) told = true;
+        CHECK(told, "the wave is not in the story"); }
+    /* the director: on its own, a lazy dish gets requests and a wave */
+    dish_init(&dish, 113, SP_COCCUS, "DOT"); dish_ui_init(&ui); dish.run_muts = 1;
+    int q0 = ev_count[DEV_QUEST], wv0 = ev_count[DEV_WAVE];
+    run(&dish, 9 * 60, 20, false);
+    printf("play: 9 lazy minutes: %d quest events, %d wave events, %u DNA\n", ev_count[DEV_QUEST] - q0, ev_count[DEV_WAVE] - wv0, (unsigned)dish.dna);
+    CHECK(ev_count[DEV_QUEST] - q0 >= 8, "too few requests in 9 minutes (%d events)", ev_count[DEV_QUEST] - q0);
+    CHECK(ev_count[DEV_WAVE] - wv0 >= 3, "no wave in 9 minutes");
+    printf("selftest-play: %s\n", fails ? "FAILED" : "ok");
     return fails ? 1 : 0;
 }
 
@@ -945,7 +1069,7 @@ static bool load_ai(const char *model, const char *tok) {
 static int ai_agree(const char *model, const char *tok, const char *traces) {
     if (!load_ai(model, tok)) return 1;
     FILE *f = fopen(traces, "r"); if (!f) { perror(traces); return 1; }
-    static char ln[2048]; int n = 0, goal_ok = 0, tgt_n = 0, tgt_ok = 0;
+    static char ln[2048]; int n = 0, goal_ok = 0, tgt_n = 0, tgt_ok = 0, say_ok = 0;
     int conf[ST_COUNT][ST_COUNT]; memset(conf, 0, sizeof conf);
     while (fgets(ln, sizeof ln, f)) {
         char *st = strstr(ln, "\"state\": \""), *gl = strstr(ln, "\"goal\": \"");
@@ -953,17 +1077,17 @@ static int ai_agree(const char *model, const char *tok, const char *traces) {
         st += 10; gl += 9;
         char *se = strchr(st, '"'), *ge = strchr(gl, '"'); if (!se || !ge) continue;
         *se = 0; *ge = 0;
-        char tg[16], tt[16]; int tu; if (sscanf(gl, "%15s %15s urgency %d", tg, tt, &tu) != 3) continue;
+        char tg[16], tt[16], ts[16] = ""; int tu; if (sscanf(gl, "%15s %15s urgency %d say %15s", tg, tt, &tu, ts) < 3) continue;
         int want = -1; for (int g = 0; g < ST_COUNT; g++) if (!strcmp(STRAT_NAMES[g], tg)) want = g;
         if (want < 0) continue;
         const int8_t other[3] = { 0, 1, 2 }; strat_t r;
         if (!dish_ai_decide(st, other, &r)) continue;
-        n++; goal_ok += r.id == want; conf[want][r.id]++;
+        n++; goal_ok += r.id == want; conf[want][r.id]++; say_ok += r.say < SAY_COUNT && !strcmp(SAY_WORDS[r.say], ts);
         if (ST_TARGETED(want) && r.id == want) { char got[8]; snprintf(got, sizeof got, r.target < 0 ? "none" : "other%d", r.target + 1); tgt_n++; tgt_ok += !strcmp(got, tt); }
     }
     fclose(f);
-    printf("agreement on %d traces: goal %.1f%%, target (when the goal agrees and has one) %.1f%%, %.1f ms a decision\n",
-           n, 100.0 * goal_ok / (n ? n : 1), 100.0 * tgt_ok / (tgt_n ? tgt_n : 1), dish_ai_stats().ms_mean);
+    printf("agreement on %d traces: goal %.1f%%, target (when the goal agrees and has one) %.1f%%, say %.1f%%, %.1f ms a decision\n",
+           n, 100.0 * goal_ok / (n ? n : 1), 100.0 * tgt_ok / (tgt_n ? tgt_n : 1), 100.0 * say_ok / (n ? n : 1), dish_ai_stats().ms_mean);
     printf("teacher -> student (rows: the teacher's goal)\n");
     for (int a = 0; a < ST_COUNT; a++) {
         int row = 0; for (int b = 0; b < ST_COUNT; b++) row += conf[a][b];
@@ -987,6 +1111,7 @@ int main(int argc, char **argv) {
         if (!strcmp(argv[a], "--selftest-verbs")) return selftest_verbs();
         if (!strcmp(argv[a], "--selftest-mind")) return selftest_mind();
         if (!strcmp(argv[a], "--selftest-ai")) return selftest_ai();
+        if (!strcmp(argv[a], "--selftest-play")) return selftest_play();
         if (!strcmp(argv[a], "--test-model") && a + 2 < argc) {   /* the selftests' random model, as files (to try --ai, --ai-agree) */
             size_t tl, ml = dish_ai_test_model_size(&tl); uint8_t *m = malloc(ml), *t = malloc(tl);
             dish_ai_test_model(m, ml, t, tl, 7);

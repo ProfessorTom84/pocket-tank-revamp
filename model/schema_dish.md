@@ -42,7 +42,7 @@ far is anything beyond.
 ## The answer
 
 ```
-<goal> <target> urgency <0-9>
+<goal> <target> urgency <0-9> say <word>
 ```
 
 - **Goals (12):** forage, cluster, explore, rest, divide, spore, seek_light, avoid_light, hunt,
@@ -50,10 +50,15 @@ far is anything beyond.
 - **Target:** other1, other2, other3 or none. The four goals hunt, flee, guard and befriend need a
   target that is present in the line. Every other goal takes `none`.
 - **Urgency:** 0 to 9. The reflexes move a little faster when it is high.
+- **Say:** what the colony says out loud, one of 28 words (`SAY_WORDS` in common/dish_talk.c): hello,
+  pal, share, thanks, protect, lunch, taunt, attack, run, scared, hide, hungry, yum, grow, sleepy,
+  curious, sunny, shade, squished, together, brave, ouch, proud, bored, infect, zap, bye, help. The
+  game turns the word into a speech bubble with an emoji, in a short, medium or long phrasing
+  ("LUNCH!" / "YOU LOOK DELICIOUS." / "COME HERE, LITTLE SNACK. I WON'T BITE... MUCH.").
 
-The training document is `<BOS> line -> goal target urgency d`. On the board, each of the three
-answer words is chosen from its own closed set by `dish_ai_decide`, and "urgency" is fed in
-between. Every answer is therefore a valid decision. The goal's softmax share is how sure the
+The training document is `<BOS> line -> goal target urgency d say word`. On the board, each of the
+four answer words is chosen from its own closed set by `dish_ai_decide`, with "urgency" and "say"
+fed in between. Every answer is therefore a valid decision. The goal's softmax share is how sure the
 strain is, and the lens shows it as "SURE 82%".
 
 ## Changing it

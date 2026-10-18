@@ -11,7 +11,8 @@ gemma4:26b works the same way: pass `--host`.
 
 ## 0. What is built
 
-- **The line and the answer:** `model/schema_dish.md` (dish schema v1, 49 words, vocab 122).
+- **The line and the answer:** `model/schema_dish.md` (dish schema v1, 49 words; the answer is a goal,
+  a target, an urgency and what the colony says; vocab 151 with the specials).
 - **The C sampler:** `sim/dishsim --dump-states N seed`. It plays random dishes (random starters,
   builds, visitors, light, hunger and harm) and prints the exact line the board encodes.
 - **The teacher:** `model/gen_dish_traces.py`. It sends structured JSON with closed choices and
@@ -20,7 +21,7 @@ gemma4:26b works the same way: pass `--host`.
 - **The preflight:** `model/dish_prompt_check.py`, about 450 calls with the acceptance numbers
   written in.
 - **The tokenizer:** `model/train_tokenizer.py --schema 10` reads `model/dish_lexicon.txt`.
-- **The runtime:** `common/dish_ai.c` does the constrained three-word decode and the need-based
+- **The runtime:** `common/dish_ai.c` does the constrained four-word decode and the need-based
   scheduler. On the board it runs on core 1, below the bottom render band. In the sim it gets up
   to 8 ms a frame.
 - **Checks:** `dishsim --selftest-ai` runs the whole path on a random test model.
@@ -79,7 +80,7 @@ python3 export_q4.py out/model_dish_q4.bin --checkpoint out/dish_ckpt.pt
 
 - **Size:** dim 256 with 6 layers gives hidden 704 (a multiple of 64, which the q4 kernels need).
   That is about 4.9M parameters, roughly 2.7 MB at 4 bits, which fits the 8 MB model partition.
-- **Sequence length:** `--max-seq-len 64` covers the 49-word line, BOS, `->` and the three answer
+- **Sequence length:** `--max-seq-len 64` covers the 49-word line, BOS, `->` and the six answer
   words. The runtime refuses a model with a sequence length under 60.
 
 ## 5. Acceptance
@@ -91,7 +92,7 @@ python3 gen_dish_traces.py --count 2000 --seed 999 --out out/dish_heldout.jsonl
 ../sim/dishsim --ai-agree out/model_dish_q4.bin out/tokenizer_v10.bin out/dish_heldout.jsonl
 ```
 
-The command runs the board's own decode and prints the goal agreement, the target agreement and a
+The command runs the board's own decode and prints the goal, target and say agreement and a
 confusion table, row by row. Ship at 85% goal agreement or better (the fish's v3m reached about
 88%, `docs/stats.md`). Then watch it play:
 
@@ -117,7 +118,7 @@ the dish.
 - **Core 0** runs the world tick, the top render band, the pages and the flush.
 - **Core 1** renders the bottom band at priority 4. Between bands it thinks at priority 2: a band
   always preempts a thought, so the frame rate is the same as with no model.
-- **Thought rate:** one decision is a 49-token prefill plus three single-token steps. The fish's
+- **Thought rate:** one decision is a 51-token prefill plus five single-token steps. The fish's
   14M model took 3.7 s; this one is a third the size and gets half of core 1, so expect a thought
   every 2-3 s.
 - **Scheduler:** it picks the neediest strain: whose line changed most, who has waited longest,

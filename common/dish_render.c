@@ -648,34 +648,7 @@ static void draw_links(const view_t *v, const dish_t *d) {
             v_glow(v, x, y, r * 3, dr_hsv(fmodf(d->clock * 0.3f + c->x * 0.004f + c->y * 0.003f, 1), 0.6f, 1), 0.35f);
     }
 }
-bool dish_render_thoughts = true;
-/* a strain's thought, as a little icon over its colony (12 goals, 12 drawings) */
-static void draw_thought_icon(const view_t *v, float x, float y, float s, int g, float k) {
-    float w = fmaxf(1.2f, s * 0.18f);
-    switch (g) {
-    case ST_FORAGE: v_glow(v, x, y, s * 0.55f, 0xFFC870, k); v_glow(v, x - s * 0.4f, y + s * 0.3f, s * 0.3f, 0xFFC870, k * 0.7f); break;
-    case ST_CLUSTER: for (int m = 0; m < 3; m++) v_disc(v, x + cosf(m * 2.094f) * s * 0.32f, y + sinf(m * 2.094f) * s * 0.32f, s * 0.24f, 0xBFE8FF, (int)(230 * k)); break;
-    case ST_EXPLORE: v_line(v, x - s * 0.5f, y, x + s * 0.5f, y, w, 0xBFE8FF, 0, (int)(230 * k));
-                     v_line(v, x + s * 0.5f, y, x + s * 0.15f, y - s * 0.35f, w, 0xBFE8FF, 0, (int)(230 * k));
-                     v_line(v, x + s * 0.5f, y, x + s * 0.15f, y + s * 0.35f, w, 0xBFE8FF, 0, (int)(230 * k)); break;
-    case ST_REST: for (int m = 0; m < 2; m++) { float o = m * s * 0.45f, z = s * (0.3f - m * 0.08f), zx = x - s * 0.2f + o, zy = y + s * 0.2f - o;
-                     v_line(v, zx - z, zy - z, zx + z, zy - z, w * 0.8f, 0x9FB8FF, 0, (int)(220 * k)); v_line(v, zx + z, zy - z, zx - z, zy + z, w * 0.8f, 0x9FB8FF, 0, (int)(220 * k));
-                     v_line(v, zx - z, zy + z, zx + z, zy + z, w * 0.8f, 0x9FB8FF, 0, (int)(220 * k)); } break;
-    case ST_DIVIDE: v_ring(v, x - s * 0.25f, y, s * 0.3f, w * 0.7f, 0x7FF0A0, k); v_ring(v, x + s * 0.25f, y, s * 0.3f, w * 0.7f, 0x7FF0A0, k); break;
-    case ST_SPORE: v_ring(v, x, y, s * 0.4f, w, 0xFFFFFF, k); v_glow(v, x, y, s * 0.25f, 0xFFFFFF, k); break;
-    case ST_SEEK_LIGHT: case ST_AVOID_LIGHT:
-        v_disc(v, x, y, s * 0.25f, 0xFFE07A, (int)(240 * k));
-        for (int m = 0; m < 8; m++) { float t = m * TAU / 8; v_line(v, x + cosf(t) * s * 0.36f, y + sinf(t) * s * 0.36f, x + cosf(t) * s * 0.55f, y + sinf(t) * s * 0.55f, w * 0.6f, 0xFFE07A, 0, (int)(220 * k)); }
-        if (g == ST_AVOID_LIGHT) v_line(v, x - s * 0.5f, y + s * 0.5f, x + s * 0.5f, y - s * 0.5f, w, 0xFF5A4E, 0, (int)(240 * k));
-        break;
-    case ST_HUNT: v_line(v, x - s * 0.45f, y - s * 0.35f, x + s * 0.1f, y, w, 0xFF5A4E, 0, (int)(240 * k)); v_line(v, x + s * 0.1f, y, x - s * 0.45f, y + s * 0.35f, w, 0xFF5A4E, 0, (int)(240 * k));
-                  v_line(v, x, y - s * 0.35f, x + s * 0.5f, y, w, 0xFF5A4E, 0, (int)(240 * k)); v_line(v, x + s * 0.5f, y, x, y + s * 0.35f, w, 0xFF5A4E, 0, (int)(240 * k)); break;
-    case ST_FLEE: v_line(v, x, y - s * 0.5f, x, y + s * 0.12f, w * 1.3f, 0xFFD040, 0, (int)(240 * k)); v_disc(v, x, y + s * 0.42f, w * 0.75f, 0xFFD040, (int)(240 * k)); break;
-    case ST_GUARD: v_line(v, x - s * 0.4f, y - s * 0.4f, x + s * 0.4f, y - s * 0.4f, w, 0x7FB8FF, 0, (int)(240 * k));
-                   v_line(v, x - s * 0.4f, y - s * 0.4f, x, y + s * 0.5f, w, 0x7FB8FF, 0, (int)(240 * k)); v_line(v, x + s * 0.4f, y - s * 0.4f, x, y + s * 0.5f, w, 0x7FB8FF, 0, (int)(240 * k)); break;
-    case ST_BEFRIEND: draw_heart(v, x, y, s * 0.32f, 0xFF5C8A, k); break;
-    }
-}
+bool dish_render_thoughts = true;   /* (the lines from a colony to the strain its goal is about; the words are dish_ui.c's bubbles) */
 static uint32_t goal_color(int g) { return g == ST_HUNT ? 0xFF5A4E : g == ST_FLEE ? 0xFFD040 : g == ST_GUARD ? 0x7FB8FF : 0xFF7FAA; }
 static void draw_thoughts(const view_t *v, const dish_t *d) {
     for (int s = 0; s < DISH_MAX_STRAINS; s++) {
@@ -694,13 +667,6 @@ static void draw_thoughts(const view_t *v, const dish_t *d) {
                 v_line(v, x + lx * a, y + ly * a, x + lx * b, y + ly * b, 1.6f, goal_color(g), 0.35f, 0);
             }
         }
-        /* the bubble pops in when the goal changes, and it is bold while the strain is sure */
-        float pop = fminf(1, st->decided_t * 4), sz = 13 * (pop < 1 ? 0.6f + 0.6f * pop : 1);
-        float bx = x, by = y - 34;
-        if (by < 20) by = y + 34;
-        v_disc(v, bx, by, sz, 0x060A14, 190);
-        v_ring(v, bx, by, sz, 1.2f, dr_hsv(shown_hue(&st->vault), 0.5f, 1), 0.6f);
-        draw_thought_icon(v, bx, by, sz * 1.25f, g, 0.5f + 0.5f * fminf(1, st->strat.confidence));
     }
 }
 
@@ -709,6 +675,15 @@ static void draw_world(const view_t *v, const dish_t *d) {
     draw_fields(v, d);
     prof(1);
     if (d->warm > 0.02f) v_glow(v, WX(v, d->warm_x), WY(v, d->warm_y), 46 * v->s, 0xFF5A1E, d->warm * 0.9f);
+    for (int w = 0; w < DISH_WALLS; w++) {                   /* the keeper's walls: a bright ridge in the agar, fading at the end */
+        if (d->wall[w].t <= 0 || d->wall[w].n < 2) continue;
+        float k = fminf(1, d->wall[w].t / 3) * (d->wall[w].t > DISH_WALL_LIFE - 0.3f ? 1.6f : 1);
+        for (int p = 0; p + 1 < d->wall[w].n; p++) {
+            float ax = WX(v, d->wall[w].x[p]), ay = WY(v, d->wall[w].y[p]), bx = WX(v, d->wall[w].x[p + 1]), by = WY(v, d->wall[w].y[p + 1]);
+            v_line(v, ax, ay, bx, by, 9 * v->s, 0x3FA8D8, 0.35f * k, 0);
+            v_line(v, ax, ay, bx, by, 3.5f * v->s, 0xD8F4FF, 0.8f * k, 0);
+        }
+    }
     if (d->beam > 0.02f) {                                   /* the finger's light: a warm pool on the agar */
         v_glow(v, WX(v, d->beam_x), WY(v, d->beam_y), 58 * v->s, 0xFFE6A8, d->beam * 0.45f);
         v_glow(v, WX(v, d->beam_x), WY(v, d->beam_y), 18 * v->s, 0xFFFFFF, d->beam * 0.35f);

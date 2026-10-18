@@ -1,10 +1,10 @@
 /* dish_ai.h — every strain's mind, on a small language model (model/schema_dish.md).
  *
  * The model is distilled from gemma4:26b (docs/dish-ai.md): it reads the state
- * line dish_encode writes and answers "<goal> <target> urgency <d>". Each of
- * the three answer words is picked from its closed set (the goals, then
- * other1..3 / none, then 0..9), so the answer is always a valid decision; the
- * goal's softmax is how sure the strain is.
+ * line dish_encode writes and answers "<goal> <target> urgency <d> say <w>".
+ * Each of the four answer words is picked from its closed set (the goals,
+ * other1..3 / none, 0..9, the say words of dish_talk.h), so the answer is
+ * always a valid decision; the goal's softmax is how sure the strain is.
  *
  * The dish asks through dish_ai_brain (a dish_brain_fn): it posts the strain's
  * line and answers at once - with the model's last answer for that strain

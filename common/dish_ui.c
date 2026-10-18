@@ -5,9 +5,12 @@
 #include "dish_story.h"
 #include "sounds.h"
 #include "dish_mut.h"
+#include "dish_talk.h"
+#include "dish_quest.h"
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 
 #define TAU 6.2831853f
 /* a goal as words, with and without the strain it is about */
@@ -25,14 +28,16 @@ static float top_for(float w, float m) {
     while (y < DISH_CY && !(dish_inside(DISH_CX - w * 0.5f, y, m) && dish_inside(DISH_CX + w * 0.5f, y, m))) y += 2;
     return y;
 }
-/* the two corner buttons: as far into the top corners as the glass allows */
-static void corner_pos(int right, float *x, float *y) {
+/* the corner buttons: STORY top left, DISH top right, WALL bottom left - as far into the corners as the glass allows */
+enum { BTN_STORY, BTN_DISH, BTN_WALL, BTN_COUNT };
+static void corner_pos(int k, float *x, float *y) {
+    bool right = k == BTN_DISH, bottom = k == BTN_WALL;
     float t = DISH_BTN_R + 6;
-    while (t < DISH_CY && !dish_inside(right ? DISH_W - t : t, t, DISH_BTN_R + 4)) t += 1;
-    *x = right ? DISH_W - t : t; *y = t;
+    while (t < DISH_CY && !dish_inside(right ? DISH_W - t : t, bottom ? DISH_H - t - 10 : t, DISH_BTN_R + 4)) t += 1;
+    *x = right ? DISH_W - t : t; *y = bottom ? DISH_H - t - 10 : t;   /* (the bottom one sits higher: its label goes under it) */
 }
 static int corner_hit(float x, float y) {
-    for (int k = 0; k < 2; k++) { float cx, cy; corner_pos(k, &cx, &cy); if (hypot2(x - cx, y - cy) < DISH_BTN_R + 6) return k; }
+    for (int k = 0; k < BTN_COUNT; k++) { float cx, cy; corner_pos(k, &cx, &cy); if (hypot2(x - cx, y - cy) < DISH_BTN_R + 6) return k; }
     return -1;
 }
 #define PW (DISH_W - 48 < 340 ? DISH_W - 48 : 340)
@@ -41,6 +46,8 @@ static int corner_hit(float x, float y) {
 #define PY ((int)(DISH_CY - PH / 2))
 typedef struct { int x, y, w, h; } rect_t;
 static bool in_rect(rect_t r, float x, float y) { return x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h; }
+/* the banner: what the colony asks for, or the wave (under the name and the DNA) */
+static rect_t quest_pill(void) { int w = DISH_W - 2 * (DISH_BTN_R * 2 + 20) < 330 ? DISH_W - 2 * (DISH_BTN_R * 2 + 20) : 330; return (rect_t){ (int)DISH_CX - w / 2, (int)top_for(150, 6) + 36, w, 30 }; }
 static rect_t page_done(void) { return (rect_t){ (int)DISH_CX - 60, PY + PH - 54, 120, 40 }; }
 /* the card's three buttons; the dex's and the badges' grids (6 x 3) */
 static rect_t card_btn(int k) { int w = (PW - 52) / 3; return (rect_t){ PX + 18 + k * (w + 8), PY + PH - 42, w, 30 }; }
@@ -65,7 +72,10 @@ static rect_t draft_card(int k) { int w = (PW - 40) / 3; return (rect_t){ PX + 1
 void dish_ui_hotspot(hotspot_t h, float *x, float *y) {
     rect_t r;
     switch (h) {
-    case HS_STORY: case HS_DISH: corner_pos(h == HS_DISH, x, y); return;
+    case HS_STORY: corner_pos(BTN_STORY, x, y); return;
+    case HS_DISH: corner_pos(BTN_DISH, x, y); return;
+    case HS_WALL: corner_pos(BTN_WALL, x, y); return;
+    case HS_QUEST: r = quest_pill(); break;
     case HS_CARD_DEX: r = card_btn(0); break;     case HS_CARD_BADGES: r = card_btn(1); break;
     case HS_CARD_NEWRUN: r = card_btn(2); break;
     case HS_STARTER_0: case HS_STARTER_1: case HS_STARTER_2: case HS_STARTER_3: case HS_STARTER_4: case HS_STARTER_5:
@@ -91,6 +101,8 @@ static void lens_geom(const dish_t *d, int cell, float *cx, float *cy, float *r)
 void dish_ui_init(dish_ui_t *u) {
     memset(u, 0, sizeof *u);
     u->mood = 0.8f; u->lens = -1; u->lens_zoom = 5; u->sel = -1; u->prev_lens = -1; u->tap_t = 9; u->on_button = -1;
+    u->down_cell = -1; u->wall_i = -1; u->chat_cd = 8; u->hint_cd = 4; u->info_x = -1;
+    for (int k = 0; k < DISH_BUBBLES; k++) u->bub[k].strain = -1;
 }
 static void sfx(dish_ui_t *u, int cue, int pitch, float cd);
 void dish_ui_begin_setup(dish_ui_t *u) { u->setup = 1; u->page = PAGE_NONE; u->lens = -1; sfx(u, SND_WELCOME, 256, 0); }
@@ -126,6 +138,60 @@ void dish_ui_thought(const dish_t *d, int s, char *out, int n) {
         snprintf(out, (size_t)n, t == DISH_PET ? "%s: %s %s  SURE %d%%" : "%s: %s THE %s  SURE %d%%", who, DOING_TO[g], whom, sure);
     } else snprintf(out, (size_t)n, "%s: %s  SURE %d%%", who, DOING[g], sure);
 }
+/* ---- talk ---- */
+/* the cell a strain speaks from: the one given (if it lives), else the one nearest its colony's middle */
+static int speaker_cell(const dish_t *d, int s, uint32_t id) {
+    int best = -1; float bd = 1e18f;
+    for (int i = 0; i < DISH_MAX_CELLS; i++) {
+        const cell_t *c = &d->cell[i];
+        if (c->strain != s || (c->state != CS_LIVE && c->state != CS_SPORE)) continue;
+        if (id && c->id == id) return i;
+        float dd = (c->x - d->strain[s].cx) * (c->x - d->strain[s].cx) + (c->y - d->strain[s].cy) * (c->y - d->strain[s].cy);
+        if (dd < bd) { bd = dd; best = i; }
+    }
+    return best;
+}
+static void say_from(dish_ui_t *u, const dish_t *d, int s, uint32_t cell_id, int emoji, const char *text, float delay, float ttl) {
+    if (u->setup || s < 0 || s >= DISH_MAX_STRAINS || !d->strain[s].used || !text[0]) return;
+    int k = 0;
+    for (int i = 0; i < DISH_BUBBLES; i++) if (u->bub[i].strain == s) { k = i; goto put; }   /* one bubble per strain: the new line replaces */
+    for (int i = 0; i < DISH_BUBBLES; i++) if (u->bub[i].strain < 0 || u->bub[i].t >= u->bub[i].ttl) { k = i; goto put; }
+    for (int i = 1; i < DISH_BUBBLES; i++) if (u->bub[i].ttl - u->bub[i].t < u->bub[k].ttl - u->bub[k].t) k = i;   /* (or the one nearest its end) */
+put:
+    u->bub[k] = (dish_bubble_t){ (int8_t)s, (uint8_t)emoji, cell_id, 0, ttl, delay, "" };
+    snprintf(u->bub[k].text, sizeof u->bub[k].text, "%s", text);
+    if (s == DISH_PET) u->chat_cd = 14;
+}
+void dish_ui_say(dish_ui_t *u, const dish_t *d, int s, int emoji, const char *text, float delay) {
+    int n = (int)strlen(text);
+    say_from(u, d, s, 0, emoji, text, delay, 2.2f + n * 0.06f);   /* (longer lines stay longer) */
+}
+/* the strain says what its mind decided to say, to `about` (the name in the line) */
+static void say_mind(dish_ui_t *u, const dish_t *d, int s, int about, uint32_t cell_id, float delay) {
+    char line[72];
+    const char *t = about >= 0 && about < DISH_MAX_STRAINS && d->strain[about].used ? strain_name(d, about) : "";
+    int e = dish_say_text(d->strain[s].strat.say, dish_say_variant(d, s), t, line, sizeof line);
+    say_from(u, d, s, cell_id, e, line, delay, 2.2f + strlen(line) * 0.06f);
+}
+static void info(dish_ui_t *u, const char *text, float x, float y, float seconds) {
+    snprintf(u->info, sizeof u->info, "%s", text);
+    u->info_t = seconds; u->info_x = x; u->info_y = y;
+}
+/* a tap on a bubble: who that is, and what it is up to */
+static const char *const GOAL_HELP[ST_COUNT] = { "LOOKING FOR FOOD.", "HUDDLING TOGETHER FOR SAFETY.", "WANDERING OFF TO FIND NEW GROUND.",
+    "RESTING TO SAVE ENERGY.", "SPLITTING IN TWO TO GROW.", "TURNING INTO TOUGH SPORES TO SURVIVE.", "COMING TO YOUR LIGHT.",
+    "HIDING FROM YOUR LIGHT.", "HUNTING THE %s.", "RUNNING AWAY FROM THE %s.", "GUARDING THE %s FROM DANGER.", "MAKING FRIENDS WITH THE %s." };
+static void explain(dish_ui_t *u, const dish_t *d, int s) {
+    const strain_t *st = &d->strain[s];
+    char doing[64], b[128];
+    const char *t = st->strat.target >= 0 && st->strat.target < DISH_MAX_STRAINS && d->strain[st->strat.target].used ? strain_name(d, st->strat.target) : "OTHERS";
+    snprintf(doing, sizeof doing, GOAL_HELP[st->strat.id < ST_COUNT ? st->strat.id : 0], t);
+    const char *role = s == DISH_PET ? "YOUR GERMS" : SPECIES_FRIENDLY[st->species] ? "A FRIENDLY VISITOR" : "A DANGEROUS VISITOR";
+    snprintf(b, sizeof b, "%s, %s. RIGHT NOW: %s", strain_name(d, s), role, doing);
+    info(u, b, -1, 0, 5);
+}
+int dish_ui_bubble_at(const dish_ui_t *u, const dish_t *d, float x, float y);
+
 void dish_ui_event(dish_ui_t *u, const dish_t *d, int ev, int strain) {
     const strain_t *pet = &d->strain[DISH_PET];
     char b[64];
@@ -144,31 +210,59 @@ void dish_ui_event(dish_ui_t *u, const dish_t *d, int ev, int strain) {
     case DEV_DRAFT:    sfx(u, SND_STAGE_UP, 256, 0); break;
     case DEV_RUN_OVER: sfx(u, SND_SLEEP, 200, 0); break;
     case DEV_ZAP:      sfx(u, SND_SNIP, 420, 0.5f); break;
+    case DEV_MEET:     sfx(u, SND_BUBBLES, 420, 1.5f); break;
+    case DEV_QUEST:    sfx(u, strain == QS_WON ? SND_MILESTONE : strain == QS_ON ? SND_BEG : SND_ERROR, 300, 0); break;
+    case DEV_WAVE:     sfx(u, strain == 1 ? SND_SPOOK : strain == 3 ? SND_STAGE_UP : SND_ERROR, strain == 1 ? 180 : 256, 0); break;
     case DEV_BLOOM:    sfx(u, SND_MILESTONE, 380, 0); break;
     }
     switch (ev) {
     case DEV_EXTINCT: u->extinct_show = 1; u->lens = -1; if (u->page != PAGE_DRAFT) u->page = PAGE_NONE; break;
     case DEV_RESPAWN: u->extinct_show = 0; u->back_show = 3.5f; snprintf(b, sizeof b, d->vault_used ? "LAST CHANCE: %s IS BACK" : "%s IS BACK!", pet->name); dish_ui_toast(u, b, 4); break;
     case DEV_RUN_OVER: u->lens = -1; u->page = PAGE_RUNOVER; break;
-    case DEV_VISIT:
+    case DEV_VISIT: {
         snprintf(b, sizeof b, SPECIES_FRIENDLY[strain] ? "A FRIEND: %s ARRIVED" : "DANGER: %s ARRIVED", SPECIES_NAMES[strain]);
-        dish_ui_toast(u, b, 4); break;
+        dish_ui_toast(u, b, 4);
+        for (int s = 1; s < DISH_MAX_STRAINS; s++)      /* the newcomer introduces itself */
+            if (d->strain[s].used && d->strain[s].species == strain) {
+                char l[72]; int e = dish_say_text(SPECIES_FRIENDLY[strain] ? SAY_HELLO : SAY_TAUNT, dish_say_variant(d, s), pet->name, l, sizeof l);
+                say_from(u, d, s, 0, e, l, 0.6f, 3.5f);
+            }
+        break; }
+    case DEV_MEET: {                                  /* two strains met: the one with something to say first, the other answers */
+        int a = strain / 8, c = strain % 8;
+        if (a >= DISH_MAX_STRAINS || c >= DISH_MAX_STRAINS || !d->strain[a].used || !d->strain[c].used) break;
+        int first = ST_TARGETED(d->strain[c].strat.id) && d->strain[c].strat.target == a ? c : a, second = first == a ? c : a;
+        if (first == DISH_PET && second != DISH_PET && !ST_TARGETED(d->strain[DISH_PET].strat.id)) { first = second; second = DISH_PET; }
+        int fc = speaker_cell(d, first, 0), sc = speaker_cell(d, second, 0);
+        say_mind(u, d, first, second, fc >= 0 ? d->cell[fc].id : 0, 0);
+        say_mind(u, d, second, first, sc >= 0 ? d->cell[sc].id : 0, 1.4f);
+        break; }
+    case DEV_QUEST:
+        if (strain == QS_ON) { char l[96]; dish_quest_ask(d, l, sizeof l); dish_ui_say(u, d, DISH_PET, EMO_EXCLAIM, l, 0); }
+        else if (strain == QS_WON) { snprintf(b, sizeof b, "THANK YOU, GIANT! +%d DNA", d->quest.reward); dish_ui_say(u, d, DISH_PET, EMO_STAR, b, 0); }
+        else if (strain == QS_LOST) dish_ui_say(u, d, DISH_PET, EMO_SAD, "OH WELL... MAYBE NEXT TIME.", 0);
+        break;
+    case DEV_WAVE:
+        if (strain == 1) dish_ui_say(u, d, DISH_PET, EMO_SCARED, "SOMETHING'S COMING! GET READY!", 0);
+        else if (strain == 3) {
+            const strain_t *p = &d->strain[DISH_PET];
+            bool held = p->count > 0 && (int)(uint16_t)(p->deaths - d->wave.lost0) <= 6;
+            dish_ui_say(u, d, DISH_PET, held ? EMO_STAR : EMO_SAD, held ? "WE HELD THEM OFF! YOU'RE AMAZING!" : "THAT WAS ROUGH...", 0);
+        }
+        break;
     case DEV_VISIT_GONE:
         if (u->toast_t <= 0) { snprintf(b, sizeof b, "THE %s LEFT", SPECIES_NAMES[strain]); dish_ui_toast(u, b, 3); }
         break;
     case DEV_GIFT: dish_ui_toast(u, "GENE GIFT: A FREE MUTATION!", 4); break;
     case DEV_OUTBREAK: dish_ui_toast(u, "VIRUSES ARE COMING!", 4); break;
     case DEV_BADGE: snprintf(b, sizeof b, "BADGE: %s  +%d DNA", BADGE_NAMES[strain], BADGE_DNA); dish_ui_toast(u, b, 4); break;
-    case DEV_BLOOM: if (pet_ev) { snprintf(b, sizeof b, "%s IS BLOOMING!", pet->name); dish_ui_toast(u, b, 3); } break;
+    case DEV_BLOOM: if (pet_ev) dish_ui_say(u, d, DISH_PET, EMO_SPARKLE, "LOOK AT US GLOW! WE'RE BLOOMING!", 0); break;
+    case DEV_ZAP: if (pet_ev) { char l[72]; int e = dish_say_text(SAY_ZAP, dish_say_variant(d, DISH_PET), "", l, sizeof l); dish_ui_say(u, d, DISH_PET, e, l, 0); } break;
     case DEV_INFECT:
         if (pet_ev && u->toast_t <= 0) { snprintf(b, sizeof b, "%s CAUGHT A VIRUS", pet->name); dish_ui_toast(u, b, 3); }
         break;
-    case DEV_STRAT:                                  /* the pet turning to another strain is worth saying out loud */
-        if (u->toast_t <= 0 && pet->count && ST_TARGETED(pet->strat.id)) {
-            char t[64]; dish_ui_thought(d, DISH_PET, t, sizeof t);
-            char *cut = strstr(t, "  SURE"); if (cut) *cut = 0;
-            dish_ui_toast(u, t, 2.5f);
-        }
+    case DEV_STRAT:                                  /* the pet changed its mind: it says so */
+        if (pet->count) say_mind(u, d, DISH_PET, pet->strat.target, 0, 0);
         break;
     case DEV_DIVIDE:
         if (pet_ev && (pet->births == 1 || pet->births % 25 == 0) && u->toast_t <= 0) {
@@ -176,6 +270,40 @@ void dish_ui_event(dish_ui_t *u, const dish_t *d, int ev, int strain) {
         }
         break;
     }
+}
+
+/* ---- first-time hints: each thing explained once, when it first matters ---- */
+static bool hint(dish_ui_t *u, dish_t *d, int h, const char *text, float x, float y) {
+    if (d->hints >> h & 1) return false;
+    d->hints |= 1u << h;
+    info(u, text, x, y, 7);
+    u->hint_cd = 9;
+    return true;
+}
+static void hints_tick(dish_ui_t *u, dish_t *d, float dt) {
+    if (u->info_t > 0 || (u->hint_cd -= dt) > 0) return;
+    const strain_t *pet = &d->strain[DISH_PET];
+    float bx, by;
+    int threat = -1, friend = -1;
+    for (int s = 1; s < DISH_MAX_STRAINS; s++)
+        if (d->strain[s].used && d->strain[s].count) { if (SPECIES_FRIENDLY[d->strain[s].species]) friend = s; else threat = s; }
+    if (hint(u, d, HINT_LIGHT, "HOLD YOUR FINGER ON THE DISH TO SHINE LIGHT. FOOD GROWS WHERE IT SHINES.", pet->cx, pet->cy)) return;
+    for (int k = 0; k < DISH_BUBBLES; k++)
+        if (u->bub[k].strain >= 0 && u->bub[k].delay <= 0 && hint(u, d, HINT_TALK, "GERMS SAY WHAT THEY THINK. TAP A BUBBLE TO FIND OUT WHO IT IS.", -1, 0)) return;
+    if (d->quest.state == QS_ON) { rect_t r = quest_pill(); if (hint(u, d, HINT_QUEST, "YOUR GERMS ASKED FOR SOMETHING! DO IT FOR DNA. TAP THE BANNER TO SEE HOW.", r.x + r.w * 0.5f, r.y + r.h)) return; }
+    if (d->wave.on && hint(u, d, HINT_WAVE, "A WAVE IS COMING! PROTECT YOUR GERMS WITH CURRENTS, WALLS AND FLICKS.", -1, 0)) return;
+    if (threat >= 0) {
+        corner_pos(BTN_WALL, &bx, &by);
+        if (hint(u, d, HINT_WALL, "TAP THE PENCIL, THEN DRAW A LINE: A WALL NO GERM CAN CROSS.", bx, by - DISH_BTN_R)) return;
+        if (hint(u, d, HINT_FLICK, "TOUCH A GERM AND SWIPE FAST TO FLICK IT ACROSS THE DISH.", d->strain[threat].cx, d->strain[threat].cy)) return;
+    }
+    if ((threat >= 0 || friend >= 0) && hint(u, d, HINT_VISITOR, "A VISITOR! TAP ONE OF ITS GERMS TO SEE WHAT IT'S UP TO.", d->strain[threat >= 0 ? threat : friend].cx, d->strain[threat >= 0 ? threat : friend].cy)) return;
+    if (d->run_t > 50 && hint(u, d, HINT_POKE, "TAP ONE OF YOUR GERMS TO SAY HI. IT WILL ANSWER!", pet->cx, pet->cy)) return;
+    if (d->run_t > 90 && hint(u, d, HINT_TILT, "TILT THE DISH AND EVERYTHING SLIDES DOWNHILL. DOUBLE-TAP FOR DAY OR NIGHT.", -1, 0)) return;
+    corner_pos(BTN_DISH, &bx, &by);
+    if (d->run_t > 150 && hint(u, d, HINT_DISH, "THE DISH BUTTON SHOWS YOUR STRAIN, ITS BADGES AND EVERY GERM YOU'VE MET.", bx, by + DISH_BTN_R)) return;
+    corner_pos(BTN_STORY, &bx, &by);
+    if (d->run_t > 240 && hint(u, d, HINT_STORY, "THE BOOK TELLS THE STORY OF YOUR DISH, WITH CHARTS.", bx, by + DISH_BTN_R)) return;
 }
 
 void dish_ui_tick(dish_ui_t *u, dish_t *d, float dt) {
@@ -208,8 +336,22 @@ void dish_ui_tick(dish_ui_t *u, dish_t *d, float dt) {
         const cell_t *c = &d->cell[u->lens];
         if ((c->state != CS_LIVE && c->state != CS_SPORE) || c->id != u->lens_id) u->lens = -1;
     }
+    if (u->down) u->press_t += dt;
+    /* the bubbles age; the pet speaks its mind now and then, so there is always a voice in the dish */
+    for (int k = 0; k < DISH_BUBBLES; k++) {
+        dish_bubble_t *b = &u->bub[k];
+        if (b->strain < 0) continue;
+        if (b->delay > 0) b->delay -= dt; else b->t += dt;
+        if (b->t >= b->ttl || !d->strain[b->strain].used || !d->strain[b->strain].count) b->strain = -1;
+    }
+    if (u->page == PAGE_NONE && !u->setup && pet->count && (u->chat_cd -= dt) <= 0) {
+        u->chat_cd = 16 + 6 * sinf(u->clock);
+        say_mind(u, d, DISH_PET, pet->strat.target, 0, 0);
+    }
+    if (u->info_t > 0) u->info_t -= dt;
+    if (u->page == PAGE_NONE && !u->setup && pet->count) hints_tick(u, d, dt);
     /* a finger held on the agar is light: food blooms under it, and the strains decide what to make of it */
-    if (u->down && !u->dragged && u->page == PAGE_NONE && !u->setup && u->on_button < 0 && dish_inside(u->dx0, u->dy0, 4)) {
+    if (u->down && !u->dragged && !u->walling && u->page == PAGE_NONE && !u->setup && u->on_button < 0 && dish_inside(u->dx0, u->dy0, 4)) {
         u->down_t += dt;
         if (u->down_t > 0.25f) {
             if (!u->lighting) sfx(u, SND_LIGHT_ON, 330, 1.5f);
@@ -311,8 +453,28 @@ static void tap(dish_ui_t *u, dish_t *d, float x, float y) {
     if (u->setup) { setup_tap(u, d, x, y); return; }
     if (u->page != PAGE_NONE) { page_tap(u, d, x, y); return; }
     int b = corner_hit(x, y);
-    if (b == 0) { u->page = PAGE_STORY; u->story_top = 0; u->lens = -1; return; }
-    if (b == 1) { u->page = PAGE_CARD; u->confirm_t = 0; u->lens = -1; return; }
+    if (b == BTN_STORY) { u->page = PAGE_STORY; u->story_top = 0; u->lens = -1; return; }
+    if (b == BTN_DISH) { u->page = PAGE_CARD; u->confirm_t = 0; u->lens = -1; return; }
+    if (b == BTN_WALL) {
+        if (u->walling) { u->walling = false; return; }
+        if (d->ink < 1) { info(u, "NO WALLS LEFT JUST NOW: ONE MORE EVERY 12 SECONDS.", -1, 0, 3); sfx(u, SND_ERROR, 256, 0.3f); return; }
+        u->walling = true; sfx(u, SND_CONFIRM, 300, 0);
+        info(u, "DRAW A LINE ON THE DISH: IT BECOMES A WALL FOR 20 SECONDS.", -1, 0, 4);
+        return;
+    }
+    if (u->info_t > 0) {                             /* a tap on the explanation puts it away */
+        int w = DISH_W - 60, h = 64;
+        if (x > DISH_CX - w / 2 && x < DISH_CX + w / 2 && y > DISH_H - h - 48 && y < DISH_H - 24) { u->info_t = 0; return; }
+    }
+    int bb = dish_ui_bubble_at(u, d, x, y);
+    if (bb >= 0) { explain(u, d, u->bub[bb].strain); sfx(u, SND_TAP, 300, 0); return; }
+    if ((d->quest.state != QS_NONE || d->wave.on) && in_rect(quest_pill(), x, y)) {
+        char t[48]; dish_quest_text(d, t, sizeof t);
+        if (d->wave.on) info(u, "A WAVE OF GERMS IS ATTACKING! DRAG CURRENTS, DRAW WALLS AND FLICK THEM AWAY. LOSE 6 OR FEWER TO WIN.", -1, 0, 6);
+        else if (d->quest.state == QS_ON) { char b2[128]; snprintf(b2, sizeof b2, "%s: %s", t, dish_quest_help(d->quest.kind)); info(u, b2, -1, 0, 6); }
+        sfx(u, SND_TAP, 300, 0);
+        return;
+    }
     /* a double-tap: day or night */
     bool dbl = u->tap_t < 0.35f && hypot2(x - u->tap_x, y - u->tap_y) < 40;
     u->tap_t = 0; u->tap_x = x; u->tap_y = y;
@@ -327,19 +489,29 @@ static void tap(dish_ui_t *u, dish_t *d, float x, float y) {
         if (hypot2(x - lx, y - ly) < lr) { u->lens = -1; return; }
     }
     int c = dish_cell_at(d, x, y, 8);
-    if (c >= 0) open_lens(u, d, c);
-    else u->lens = -1;
+    if (c >= 0) {                                    /* a poke: it jumps, it answers, and the lens shows it */
+        dish_poke(d, c); open_lens(u, d, c);
+        char l[72]; int e = dish_poke_text(d, d->cell[c].strain, false, l, sizeof l);
+        say_from(u, d, d->cell[c].strain, d->cell[c].id, e, l, 0, 2.5f);
+        sfx(u, SND_TAP, 380, 0);
+    } else u->lens = -1;
 }
 void dish_ui_touch(dish_ui_t *u, dish_t *d, float x, float y, bool down) {
+    bool glass = u->page == PAGE_NONE && !u->setup;
     if (down && !u->down) {
         u->down = true; u->dx0 = u->lx = x; u->dy0 = u->ly = y;
-        u->down_t = 0; u->dragged = u->lighting = false; u->scroll_acc = 0;
-        u->on_button = u->page == PAGE_NONE && !u->setup ? corner_hit(x, y) : -1;
+        u->down_t = u->press_t = 0; u->dragged = u->lighting = false; u->scroll_acc = 0;
+        u->on_button = glass ? corner_hit(x, y) : -1;
+        u->down_cell = glass && u->on_button < 0 && !u->walling ? dish_cell_at(d, x, y, 10) : -1;
+        u->down_id = u->down_cell >= 0 ? d->cell[u->down_cell].id : 0;
+        u->wall_i = glass && u->walling && u->on_button < 0 ? dish_wall_begin(d, x, y) : -1;
         return;
     }
     if (down) {
         if (!u->lighting && hypot2(x - u->dx0, y - u->dy0) > 10) u->dragged = true;
-        if (u->dragged && u->page == PAGE_NONE && !u->setup && u->on_button < 0) dish_stir(d, x, y, (x - u->lx) * 1.6f, (y - u->ly) * 1.6f);   /* a current */
+        if (u->wall_i >= 0) dish_wall_add(d, u->wall_i, x, y);   /* drawing a wall */
+        else if (u->dragged && glass && u->on_button < 0 && !(u->down_cell >= 0 && u->press_t < 0.3f))   /* (a swipe off a germ may yet be a flick) */
+            dish_stir(d, x, y, (x - u->lx) * 1.6f, (y - u->ly) * 1.6f);   /* a current */
         if (u->dragged && u->page == PAGE_STORY && u->story_tab == 0) {   /* the journal scrolls, an entry per 16 px */
             u->scroll_acc += u->ly - y;
             while (u->scroll_acc > 16) { u->scroll_acc -= 16; if (u->story_top < dish_story_count(d) - 1) u->story_top++; }
@@ -350,8 +522,23 @@ void dish_ui_touch(dish_ui_t *u, dish_t *d, float x, float y, bool down) {
     }
     if (!u->down) return;
     u->down = false;
-    if (!u->dragged && !u->lighting) tap(u, d, x, y);
-    u->lighting = false;
+    if (u->wall_i >= 0) {                           /* a wall drawn: the button disarms */
+        if (d->wall[u->wall_i].n < 2) d->wall[u->wall_i].t = 0;   /* (a dot is no wall: it is given back) */
+        if (d->wall[u->wall_i].n < 2) d->ink = fminf(DISH_WALLS, d->ink + 1);
+        else sfx(u, SND_WIPE, 300, 0);
+        u->wall_i = -1; u->walling = false; u->lighting = false;
+        return;
+    }
+    float dx = x - u->dx0, dy = y - u->dy0, dd = hypot2(dx, dy);
+    int c = u->down_cell;
+    if (u->dragged && c >= 0 && u->press_t < 0.35f && dd > 25 && d->cell[c].id == u->down_id && d->cell[c].state == CS_LIVE) {   /* a flick */
+        float t = fmaxf(0.06f, u->press_t);
+        dish_flick(d, c, dx / t * 0.9f, dy / t * 0.9f);
+        char l[72]; int e = dish_poke_text(d, d->cell[c].strain, true, l, sizeof l);
+        say_from(u, d, d->cell[c].strain, d->cell[c].id, e, l, 0, 2.2f);
+        sfx(u, SND_SPOOK, 420, 0.2f);
+    } else if (!u->dragged && !u->lighting) tap(u, d, x, y);
+    u->lighting = false; u->down_cell = -1;
 }
 
 /* ---- drawing ---- */
@@ -784,13 +971,15 @@ static void draw_story(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int st
     if (u->story_tab == 0) draw_journal(u, d, fb, st); else draw_charts(u, d, fb, st);
 }
 /* the corner buttons: an open book (STORY) and a dish (DISH) */
-static void draw_corner(uint16_t *fb, int st, int k, bool alert, float clock) {
+/* the corner buttons, each with its name under it: an open book (STORY), a dish (DISH), a pencil (WALL) */
+static void draw_corner(uint16_t *fb, int st, int k, bool alert, bool active, float ink, float clock) {
     float x, y; corner_pos(k, &x, &y);
     float s = DISH_BTN_R;
-    dr_disc(fb, st, x, y, s, 0x060A16, 190);
+    dr_disc(fb, st, x, y, s, 0x060A16, 200);
     if (alert) dr_ring(fb, st, x, y, s + 2, 1.6f, 0xFFB648, (int)(150 + 100 * sinf(clock * 5)));
+    if (active) { dr_glow(fb, st, x, y, s * 1.6f, 0x3FD8FF, 110); dr_ring(fb, st, x, y, s + 1.5f, 2, 0x7FF4FF, 255); }
     dr_ring(fb, st, x, y, s - 0.5f, 1.2f, 0x5C7598, 190);
-    if (k == 0) {
+    if (k == BTN_STORY) {
         for (int m = -1; m <= 1; m += 2) {
             dr_line(fb, st, x, y + 7, x + m * 11, y + 4, 1.6f, 0xD8E6F5, 255);
             dr_line(fb, st, x, y - 6, x + m * 11, y - 9, 1.6f, 0xD8E6F5, 255);
@@ -798,10 +987,267 @@ static void draw_corner(uint16_t *fb, int st, int k, bool alert, float clock) {
             for (int r = 0; r < 3; r++) dr_line(fb, st, x + m * 3, y - 4 + r * 3.5f, x + m * 8, y - 5 + r * 3.5f, 1, 0x7FA8D8, 200);
         }
         dr_line(fb, st, x, y - 6, x, y + 7, 1.4f, 0xD8E6F5, 255);
-    } else {
+    } else if (k == BTN_DISH) {
         dr_ring(fb, st, x, y, 11, 1.6f, 0xD8E6F5, 255);
         for (int m = 0; m < 3; m++) dr_glow(fb, st, x + cosf(m * 2.1f + clock * 0.5f) * 5, y + sinf(m * 2.1f + clock * 0.5f) * 5, 3.5f, 0x7FF4FF, 220);
+    } else {                                          /* a pencil, and the walls left as dots */
+        dr_line(fb, st, x - 8, y + 6, x + 6, y - 8, 4.5f, 0xFFC23C, 255);
+        dr_line(fb, st, x - 8, y + 6, x - 11, y + 9, 2, 0xD8E6F5, 255);
+        dr_line(fb, st, x + 6, y - 8, x + 8, y - 10, 4.5f, 0xFF7A8A, 255);
+        for (int m = 0; m < DISH_WALLS; m++) {
+            float a = 2.2f + m * 0.45f, f = ink - m;
+            dr_disc(fb, st, x + cosf(a) * (s - 5), y + sinf(a) * (s - 5), 2.2f, f >= 1 ? 0x7FF4FF : 0x2A3448, 255);
+        }
     }
+    static const char *const LABEL[BTN_COUNT] = { "STORY", "DISH", "WALL" };
+    text_c(fb, st, x, (int)(y + s + 4), 1, active ? 0x7FF4FF : 0xA8B8D8, LABEL[k]);
+}
+
+/* ---- the emoji: little drawings, not font glyphs (the font has none) ---- */
+static void face(uint16_t *fb, int st, float x, float y, float r, uint32_t skin) {
+    dr_disc(fb, st, x, y, r, skin, 255);
+    dr_glow(fb, st, x - r * 0.35f, y - r * 0.4f, r * 0.35f, 0xFFFFFF, 90);
+}
+static void draw_emoji(uint16_t *fb, int st, int e, float x, float y, float r) {
+    const uint32_t INK = 0x2A1A08;
+    float w = fmaxf(1.2f, r * 0.16f);
+    switch (e) {
+    case EMO_HAPPY: case EMO_YUM: case EMO_ANGRY: case EMO_SCARED: case EMO_SAD: {
+        face(fb, st, x, y, r, e == EMO_ANGRY ? 0xFF8A4C : 0xFFD23C);
+        if (e == EMO_SCARED) { for (int m = -1; m <= 1; m += 2) { dr_disc(fb, st, x + m * r * 0.35f, y - r * 0.2f, r * 0.24f, 0xFFFFFF, 255); dr_disc(fb, st, x + m * r * 0.35f, y - r * 0.2f, r * 0.1f, INK, 255); }
+                               dr_disc(fb, st, x, y + r * 0.42f, r * 0.2f, INK, 255); break; }
+        for (int m = -1; m <= 1; m += 2) dr_disc(fb, st, x + m * r * 0.35f, y - r * 0.2f, r * 0.12f, INK, 255);
+        if (e == EMO_ANGRY) for (int m = -1; m <= 1; m += 2) dr_line(fb, st, x + m * r * 0.55f, y - r * 0.55f, x + m * r * 0.15f, y - r * 0.38f, w, INK, 255);
+        float cv = e == EMO_SAD || e == EMO_ANGRY ? -1 : 1;
+        for (int k = 0; k < 4; k++) {
+            float t0 = -1 + k * 0.5f, t1 = t0 + 0.5f;
+            dr_line(fb, st, x + t0 * r * 0.45f, y + r * 0.35f + cv * r * 0.2f * (1 - t0 * t0), x + t1 * r * 0.45f, y + r * 0.35f + cv * r * 0.2f * (1 - t1 * t1), w, INK, 255);
+        }
+        if (e == EMO_YUM) dr_disc(fb, st, x + r * 0.15f, y + r * 0.6f, r * 0.2f, 0xFF5C8A, 255);
+        if (e == EMO_SAD) dr_disc(fb, st, x + r * 0.45f, y + r * 0.1f, r * 0.13f, 0x5AC8FF, 255);
+        break; }
+    case EMO_HEART:
+        dr_disc(fb, st, x - r * 0.4f, y - r * 0.2f, r * 0.48f, 0xFF4E7A, 255); dr_disc(fb, st, x + r * 0.4f, y - r * 0.2f, r * 0.48f, 0xFF4E7A, 255);
+        for (int k = 0; k <= 6; k++) { float f = k / 6.0f; dr_line(fb, st, x - r * 0.85f * (1 - f), y + f * r * 0.85f - r * 0.05f, x + r * 0.85f * (1 - f), y + f * r * 0.85f - r * 0.05f, 2, 0xFF4E7A, 255); }
+        break;
+    case EMO_FOOD:
+        dr_disc(fb, st, x, y + r * 0.1f, r * 0.8f, 0xFF4A3C, 255); dr_glow(fb, st, x - r * 0.3f, y - r * 0.15f, r * 0.3f, 0xFFFFFF, 120);
+        dr_line(fb, st, x, y - r * 0.6f, x + r * 0.15f, y - r * 0.95f, w, 0x6A3A10, 255);
+        dr_disc(fb, st, x + r * 0.35f, y - r * 0.75f, r * 0.22f, 0x4CF070, 255);
+        break;
+    case EMO_SHIELD:
+        dr_round_rect(fb, st, (int)(x - r * 0.7f), (int)(y - r * 0.8f), (int)(r * 1.4f), (int)(r * 0.9f), 2, 0x5A9CFF, 255);
+        for (int k = 0; k <= 6; k++) { float f = k / 6.0f; dr_line(fb, st, x - r * 0.7f * (1 - f), y + f * r * 0.9f, x + r * 0.7f * (1 - f), y + f * r * 0.9f, 2, 0x5A9CFF, 255); }
+        dr_line(fb, st, x, y - r * 0.6f, x, y + r * 0.6f, w, 0xD8E6F5, 255);
+        break;
+    case EMO_BOLT:
+        dr_line(fb, st, x + r * 0.3f, y - r, x - r * 0.35f, y + r * 0.1f, w * 2, 0xFFE040, 255);
+        dr_line(fb, st, x - r * 0.35f, y + r * 0.1f, x + r * 0.35f, y - r * 0.1f, w * 2, 0xFFE040, 255);
+        dr_line(fb, st, x + r * 0.35f, y - r * 0.1f, x - r * 0.3f, y + r, w * 2, 0xFFE040, 255);
+        break;
+    case EMO_MOON: dr_disc(fb, st, x, y, r * 0.85f, 0xFFE07A, 255); dr_disc(fb, st, x + r * 0.4f, y - r * 0.25f, r * 0.7f, 0xF4F8FF, 255); break;
+    case EMO_SUN:
+        dr_disc(fb, st, x, y, r * 0.5f, 0xFFC23C, 255);
+        for (int k = 0; k < 8; k++) { float a = k * TAU / 8; dr_line(fb, st, x + cosf(a) * r * 0.65f, y + sinf(a) * r * 0.65f, x + cosf(a) * r * 0.95f, y + sinf(a) * r * 0.95f, w, 0xFFA020, 255); }
+        break;
+    case EMO_SPARKLE: case EMO_STAR: {
+        uint32_t c = e == EMO_STAR ? 0xFFC23C : 0xB07CFF;
+        for (int k = 0; k < 5; k++) {
+            float a = -1.5708f + k * TAU / 5, b = a + TAU / 10;
+            dr_line(fb, st, x + cosf(a) * r, y + sinf(a) * r, x + cosf(b) * r * 0.42f, y + sinf(b) * r * 0.42f, w * 1.4f, c, 255);
+            dr_line(fb, st, x + cosf(b) * r * 0.42f, y + sinf(b) * r * 0.42f, x + cosf(a + TAU / 5) * r, y + sinf(a + TAU / 5) * r, w * 1.4f, c, 255);
+        }
+        dr_disc(fb, st, x, y, r * 0.38f, c, 255);
+        break; }
+    case EMO_ZZZ: dr_text(fb, st, (int)(x - r * 0.9f), (int)(y - r * 0.2f), 1, 0x5A7CFF, "Z"); dr_text(fb, st, (int)(x - r * 0.2f), (int)(y - r * 0.9f), 2, 0x5A7CFF, "Z"); break;
+    case EMO_EYES:
+        for (int m = -1; m <= 1; m += 2) { dr_disc(fb, st, x + m * r * 0.42f, y, r * 0.42f, 0xFFFFFF, 255); dr_disc(fb, st, x + m * r * 0.42f + r * 0.12f, y, r * 0.18f, INK, 255); }
+        break;
+    case EMO_QUESTION: case EMO_EXCLAIM: {
+        dr_disc(fb, st, x, y, r, e == EMO_EXCLAIM ? 0xFF4E5E : 0x5A9CFF, 255);
+        const char *g = e == EMO_EXCLAIM ? "!" : "?";
+        dr_text(fb, st, (int)(x - 5), (int)(y - 7), 2, 0xFFFFFF, g);
+        break; }
+    case EMO_WAVE:
+        face(fb, st, x - r * 0.1f, y + r * 0.1f, r * 0.62f, 0xFFD23C);
+        for (int k = 0; k < 4; k++) dr_line(fb, st, x - r * 0.45f + k * r * 0.3f, y - r * 0.2f, x - r * 0.5f + k * r * 0.33f, y - r * 0.9f, w * 1.4f, 0xFFD23C, 255);
+        dr_line(fb, st, x + r * 0.7f, y - r * 0.8f, x + r * 0.95f, y - r * 0.4f, w * 0.7f, 0x7FA8D8, 255);
+        break;
+    case EMO_RING: dr_ring(fb, st, x, y, r * 0.75f, w * 1.6f, 0xFFC870, 255); break;
+    default: dr_disc(fb, st, x, y, r * 0.6f, 0x7FF4FF, 255); break;
+    }
+}
+
+/* ---- the bubbles: where each sits, wrapped, over the cell that speaks ---- */
+#define BUB_PER 15                                    /* characters a line, at scale 2 */
+#define BUB_LINE 19                                   /* px a line (the round dots of scale 2 need the air) */
+typedef struct { rect_t r; float ax, ay; int nl; char line[4][BUB_PER + 1]; } bub_geom_t;
+static int wrap_lines(const char *str, int per, char out[][BUB_PER + 1], int max_lines) {
+    int nl = 0, n = 0; const char *p = str;
+    char *line = out[0];
+    while (*p && nl < max_lines) {
+        const char *sp = strchr(p, ' '); int wl = sp ? (int)(sp - p) : (int)strlen(p);
+        if (wl > per) wl = per;
+        if (n && n + 1 + wl > per) { line[n] = 0; if (++nl >= max_lines) break; line = out[nl]; n = 0; }
+        if (n) line[n++] = ' ';
+        for (int k = 0; k < wl; k++) line[n++] = p[k];
+        p += wl; while (*p == ' ') p++;
+    }
+    if (nl < max_lines) { line[n] = 0; if (n) nl++; }
+    return nl;
+}
+static bool bubble_geom(const dish_ui_t *u, const dish_t *d, int k, bub_geom_t *g) {
+    const dish_bubble_t *b = &u->bub[k];
+    if (b->strain < 0 || b->delay > 0) return false;
+    int c = speaker_cell(d, b->strain, b->cell_id);
+    if (c < 0) return false;
+    g->ax = d->cell[c].x; g->ay = d->cell[c].y;
+    int per = (DISH_W - 120) / 12 < BUB_PER ? (DISH_W - 120) / 12 : BUB_PER;
+    g->nl = wrap_lines(b->text, per, g->line, 4);
+    int mx = 0; for (int i = 0; i < g->nl; i++) { int l = (int)strlen(g->line[i]); if (l > mx) mx = l; }
+    int nw = (int)strlen(strain_name(d, b->strain)) * 6 + 32;   /* (wide enough for the speaker's name too) */
+    int w = mx * 12 + 40 > nw ? mx * 12 + 40 : nw, h = g->nl * BUB_LINE + 22;
+    float x = g->ax - w * 0.5f, y = g->ay - 18 - h;
+    if (y < top_for(150, 6) + 70) y = g->ay + 18;    /* (no room above, under the HUD: below the cell) */
+    if (x < 8) x = 8;
+    if (x + w > DISH_W - 8) x = DISH_W - 8 - w;
+    if (y + h > DISH_H - 8) y = DISH_H - 8 - h;
+    g->r = (rect_t){ (int)x, (int)y, w, h };
+    return true;
+}
+/* every bubble placed, none on top of another: a later one moves above (or, out of room, below) the ones before it */
+static int bubble_layout(const dish_ui_t *u, const dish_t *d, bub_geom_t *g, int *idx) {
+    int n = 0;
+    for (int k = 0; k < DISH_BUBBLES; k++) {
+        if (!bubble_geom(u, d, k, &g[n])) continue;
+        rect_t *r = &g[n].r;
+        /* the free spot nearest where it wants to be: where it is, or just above or below one placed before it */
+        int want = r->y, best = want, bd = 1 << 30, top = (int)top_for(150, 6) + 70;
+        for (int c = -1; c < 2 * n; c++) {
+            int y = c < 0 ? want : c % 2 == 0 ? g[c / 2].r.y - r->h - 6 : g[c / 2].r.y + g[c / 2].r.h + 6;
+            if (y < top || y + r->h > DISH_H - 8) continue;
+            bool clear = true;
+            for (int j = 0; j < n && clear; j++) {
+                const rect_t *o = &g[j].r;
+                clear = !(r->x < o->x + o->w + 4 && o->x < r->x + r->w + 4 && y < o->y + o->h + 4 && o->y < y + r->h + 4);
+            }
+            if (clear && abs(y - want) < bd) { bd = abs(y - want); best = y; }
+        }
+        r->y = best;
+        idx[n++] = k;
+    }
+    return n;
+}
+int dish_ui_bubble_at(const dish_ui_t *u, const dish_t *d, float x, float y) {
+    bub_geom_t g[DISH_BUBBLES]; int idx[DISH_BUBBLES], n = bubble_layout(u, d, g, idx);
+    for (int k = n - 1; k >= 0; k--) if (in_rect(g[k].r, x, y)) return idx[k];
+    return -1;
+}
+static void draw_bubbles(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int st) {
+    bub_geom_t gs[DISH_BUBBLES]; int idx[DISH_BUBBLES], n = bubble_layout(u, d, gs, idx);
+    for (int pass = 0; pass < 2; pass++)              /* every tail first, then every box: no tail crosses a line of text */
+        for (int q = 0; q < n; q++) {
+            const bub_geom_t g = gs[q];
+            const dish_bubble_t *b = &u->bub[idx[q]];
+            float a = fminf(1, fminf(b->t * 6, (b->ttl - b->t) * 3));
+            if (a <= 0.02f) continue;
+            if (pass == 0) {                          /* the tail, toward the speaker */
+                float tx = fminf(fmaxf(g.ax, g.r.x + 14), g.r.x + g.r.w - 14), ty = g.r.y > g.ay ? g.r.y : g.r.y + g.r.h;
+                float ey = g.ay + (g.r.y > g.ay ? 6 : -6);
+                dr_line(fb, st, tx - 5, ty, g.ax, ey, 2.5f, 0xF4F8FF, (int)(230 * a));
+                dr_line(fb, st, tx + 5, ty, g.ax, ey, 2.5f, 0xF4F8FF, (int)(230 * a));
+                continue;
+            }
+            uint32_t edge = dr_hsv(d->strain[b->strain].vault.hue, 0.55f, 1);
+            dr_round_rect(fb, st, g.r.x - 2, g.r.y - 2, g.r.w + 4, g.r.h + 4, 12, edge, (int)(255 * a));
+            dr_round_rect(fb, st, g.r.x, g.r.y, g.r.w, g.r.h, 10, 0xF4F8FF, (int)(250 * a));
+            char who[16]; snprintf(who, sizeof who, "%s", strain_name(d, b->strain));   /* who is talking, in its colour */
+            dr_text(fb, st, g.r.x + 10, g.r.y + 5, 1, dr_hsv(d->strain[b->strain].vault.hue, 0.8f, 0.6f), who);
+            draw_emoji(fb, st, b->emoji, g.r.x + 17, g.r.y + 14 + (g.r.h - 14) * 0.5f, 10);
+            for (int i = 0; i < g.nl; i++) dr_text(fb, st, g.r.x + 32, g.r.y + 17 + i * BUB_LINE, 2, 0x141A2E, g.line[i]);
+        }
+}
+
+/* ---- the explanation bar: hints and what a tap means, at the bottom, pointing at what it is about ---- */
+static void draw_info(const dish_ui_t *u, uint16_t *fb, int st) {
+    if (u->info_t <= 0) return;
+    char lines[4][BUB_PER * 3 + 1];
+    int per = (DISH_W - 2 * (DISH_BTN_R * 2 + 18)) / 12;
+    if (per > BUB_PER * 3) per = BUB_PER * 3;
+    /* (a wider wrap than the bubbles': its own pass) */
+    int nl = 0, n = 0; const char *p = u->info; char *line = lines[0];
+    while (*p && nl < 4) {
+        const char *sp = strchr(p, ' '); int wl = sp ? (int)(sp - p) : (int)strlen(p);
+        if (wl > per) wl = per;
+        if (n && n + 1 + wl > per) { line[n] = 0; if (++nl >= 4) break; line = lines[nl]; n = 0; }
+        if (n) line[n++] = ' ';
+        for (int k = 0; k < wl; k++) line[n++] = p[k];
+        p += wl; while (*p == ' ') p++;
+    }
+    if (nl < 4) { line[n] = 0; if (n) nl++; }
+    int w = per * 12 + 24, h = nl * BUB_LINE + 14;
+    float y = DISH_H - 22 - h;
+    while (y > DISH_CY && !(dish_inside(DISH_CX - w * 0.5f, y + h, 4) && dish_inside(DISH_CX + w * 0.5f, y + h, 4))) y -= 2;
+    float a = fminf(1, u->info_t * 3);
+    if (u->info_x >= 0) {                            /* a pointer at what it is about */
+        float k = 0.5f + 0.5f * sinf(u->clock * 5);
+        dr_line(fb, st, DISH_CX, y, u->info_x, u->info_y, 2, 0xFFE07A, (int)(170 * a));
+        dr_ring(fb, st, u->info_x, u->info_y, 16 + 6 * k, 2.5f, 0xFFE07A, (int)(255 * a));
+    }
+    dr_round_rect(fb, st, (int)(DISH_CX - w / 2) - 2, (int)y - 2, w + 4, h + 4, 14, 0xFFE07A, (int)(255 * a));
+    dr_round_rect(fb, st, (int)(DISH_CX - w / 2), (int)y, w, h, 12, 0x0A1224, (int)(245 * a));
+    for (int i = 0; i < nl; i++) text_c(fb, st, DISH_CX, (int)y + 8 + i * BUB_LINE, 2, 0xFFF4D8, lines[i]);
+}
+
+/* ---- the banner: the quest, or the wave ---- */
+static const char *const SIDE_NAMES[4] = { "LEFT", "RIGHT", "TOP", "BOTTOM" };
+static void draw_banner(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int st) {
+    rect_t r = quest_pill();
+    char t[64], tm[16];
+    uint32_t fill = 0x0A1224, edge = 0xFFC23C, ink = 0xFFFFFF; int emoji = EMO_EXCLAIM; float prog = -1;
+    if (d->wave.on) {
+        float ox, oy; dish_wave_origin(d, &ox, &oy);
+        float k = 0.5f + 0.5f * sinf(u->clock * 8);
+        dr_glow(fb, st, ox, oy, 70, 0xFF3A3A, (int)(70 + 60 * k));
+        for (int m = 0; m < 3; m++) {                 /* chevrons pointing in from that side */
+            float dx = DISH_CX - ox, dy = DISH_CY - oy, l = hypot2(dx, dy) + 1; dx /= l; dy /= l;
+            float cx = ox + dx * (20 + m * 16 + 8 * k), cy = oy + dy * (20 + m * 16 + 8 * k);
+            dr_line(fb, st, cx - dy * 10 - dx * 8, cy + dx * 10 - dy * 8, cx, cy, 3, 0xFF6E6E, 230);
+            dr_line(fb, st, cx + dy * 10 - dx * 8, cy - dx * 10 - dy * 8, cx, cy, 3, 0xFF6E6E, 230);
+        }
+        int s = d->wave.strain;
+        const char *who = d->wave.on == WAVE_COMING ? SPECIES_NAMES[s >= 0 && s < SP_COUNT ? s : SP_PHAGE]
+                        : s >= 0 && s < DISH_MAX_STRAINS && d->strain[s].used ? SPECIES_NAMES[d->strain[s].species] : "GERM";
+        if (d->wave.on == WAVE_COMING) snprintf(t, sizeof t, "%sS FROM THE %s! %d", who, SIDE_NAMES[d->wave.side & 3], (int)ceilf(d->wave.t));
+        else snprintf(t, sizeof t, "DEFEND! %d S  LOST %d", (int)ceilf(d->wave.t), (int)(uint16_t)(d->strain[DISH_PET].deaths - d->wave.lost0));
+        for (char *c = t; *c; c++) if (*c >= 'a' && *c <= 'z') *c -= 32;
+        fill = 0x3A0A14; edge = 0xFF5A5A; emoji = EMO_SCARED;
+        if (d->wave.on == WAVE_ON) prog = 1 - d->wave.t / WAVE_FIGHT_S;
+    } else if (d->quest.state != QS_NONE) {
+        if (d->quest.kind == Q_HERD && d->quest.state == QS_ON) {   /* the ring to herd them into */
+            float k = 0.5f + 0.5f * sinf(u->clock * 4);
+            dr_glow(fb, st, d->quest.x, d->quest.y, 52, 0xFFC870, (int)(40 + 40 * k));
+            dr_ring(fb, st, d->quest.x, d->quest.y, 45, 2.5f, 0xFFC870, 230);
+            text_c(fb, st, d->quest.x, (int)d->quest.y - 4, 2, 0xFFE0A0, "HERE");
+        }
+        if (d->quest.state == QS_WON) { snprintf(t, sizeof t, "DONE! +%d DNA", d->quest.reward); edge = 0x4CF08C; fill = 0x0A2A1A; emoji = EMO_STAR; }
+        else if (d->quest.state == QS_LOST) { snprintf(t, sizeof t, "MISSED IT"); edge = 0x8FA0B8; ink = 0xC8D0E0; emoji = EMO_SAD; }
+        else {
+            dish_quest_text(d, t, sizeof t);
+            int left = (int)ceilf(d->quest.limit - d->quest.t);
+            snprintf(tm, sizeof tm, " %d", left < 0 ? 0 : left);
+            if (strlen(t) + strlen(tm) < sizeof t) strcat(t, tm);
+            prog = dish_quest_progress(d);
+            emoji = d->quest.kind == Q_LIGHT ? EMO_SUN : d->quest.kind == Q_HERD ? EMO_RING : d->quest.kind == Q_FRIEND ? EMO_HEART :
+                    d->quest.kind == Q_GROW ? EMO_SPARKLE : d->quest.kind == Q_FLICK ? EMO_BOLT : EMO_SHIELD;
+        }
+    } else return;
+    int sc = dr_text_w(t, 2) + 40 <= r.w ? 2 : 1;
+    dr_round_rect(fb, st, r.x - 2, r.y - 2, r.w + 4, r.h + 4, 14, edge, 255);
+    dr_round_rect(fb, st, r.x, r.y, r.w, r.h, 12, fill, 240);
+    if (prog >= 0) dr_rect(fb, st, r.x + 10, r.y + r.h - 5, (int)((r.w - 20) * fminf(1, prog)), 2, edge, 220);
+    draw_emoji(fb, st, emoji, r.x + 16, r.y + r.h * 0.5f - 1, 9);
+    dr_text(fb, st, r.x + 32, r.y + (r.h - 7 * sc) / 2 - 1, sc, ink, t);
 }
 
 void dish_ui_render(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int st) {
@@ -841,8 +1287,12 @@ void dish_ui_render(const dish_ui_t *u, const dish_t *d, uint16_t *fb, int st) {
         dr_line(fb, st, fx - 3, ty + 9 - cv * 0.2f, fx, ty + 9 + cv, 1, 0x06060A, 255);
         dr_line(fb, st, fx, ty + 9 + cv, fx + 3, ty + 9 - cv * 0.2f, 1, 0x06060A, 255);
         dna_count(fb, st, DISH_CX, ty + 20, 1, d->dna);
-        draw_corner(fb, st, 0, false, u->clock);
-        draw_corner(fb, st, 1, d->badges_new != 0, u->clock);
+        draw_corner(fb, st, BTN_STORY, false, false, 0, u->clock);
+        draw_corner(fb, st, BTN_DISH, d->badges_new != 0, false, 0, u->clock);
+        draw_corner(fb, st, BTN_WALL, false, u->walling, d->ink, u->clock);
+        if (pet->count) draw_banner(u, d, fb, st);
+        draw_bubbles(u, d, fb, st);
+        draw_info(u, fb, st);
     }
     /* extinct: the vault counts down */
     if (pet->count == 0 && pet->extinct_t > 0) {

@@ -5,7 +5,7 @@ The states come from the C sim itself (dishsim --dump-states), so the line the
 teacher reads is byte for byte the line the board encodes (schema_dish.md):
 there is no Python copy of the encoder to drift. For each line the teacher
 answers a JSON object with closed choices (Ollama structured output), and a
-{"state": ..., "goal": "<goal> <target> urgency <d>"} line is appended to the
+{"state": ..., "goal": "<goal> <target> urgency <d> say <word>"} line is appended to the
 JSONL file train.py reads.
 
   python3 gen_dish_traces.py --count 20 --dry-run      # print states, no network
@@ -28,6 +28,18 @@ GOALS = ["forage", "cluster", "explore", "rest", "divide", "spore", "seek_light"
          "hunt", "flee", "guard", "befriend"]
 TARGETED = {"hunt", "flee", "guard", "befriend"}
 TARGETS = ["other1", "other2", "other3", "none"]
+# what the colony says about it (common/dish_talk.c: SAY_WORDS, in its order), with what each means
+SAYS = {
+    "hello": "greeting a newcomer", "pal": "offering friendship", "share": "offering food to a friend",
+    "thanks": "thanking someone", "protect": "promising to protect someone", "lunch": "a hungry hunter eyeing prey",
+    "taunt": "a bully's boast", "attack": "a battle cry", "run": "telling everyone to run",
+    "scared": "frightened", "hide": "curling up into spores", "hungry": "asking for food or light",
+    "yum": "happily fed", "grow": "excited to divide", "sleepy": "drowsy, resting",
+    "curious": "wondering what is out there", "sunny": "loving the light", "shade": "the light is too bright",
+    "squished": "complaining about the crowd", "together": "calling the colony together", "brave": "standing up to a threat",
+    "ouch": "hurt, lost some cells", "proud": "showing off", "bored": "nothing to do, wants the child to play",
+    "infect": "a virus wanting in", "zap": "warning with sparks", "bye": "leaving", "help": "begging the child for help",
+}
 
 SYSTEM_PROMPT = """You are the mind of one colony of microbes in a petri dish. A child keeps the dish:
 they shine light on it (food grows where light falls), stir currents, tilt it, and pick mutations
@@ -43,7 +55,8 @@ up to three other colonies (other1..other3, nearest first: kind, role, count, di
 direction, what that colony is doing, and whether it is doing it to me, to them, or none),
 the time (day: the lamp is on) and its own last goal.
 
-Answer with a goal, a target and an urgency 0-9:
+Answer with a goal, a target, an urgency 0-9 and what the colony says out loud (a speech bubble the
+child reads), chosen from the list given. Say what fits the goal, the moment and the kind's personality:
 - forage: look for food. divide: split while fed. rest: save energy (night, or nothing to do).
 - cluster: huddle together (safety in numbers, a wall). explore: spread out to new ground.
 - spore: go dormant to survive (badly hurt, or the dish is harsh) - only kinds that can.
@@ -67,7 +80,8 @@ What each kind wants:
   jet colonies flee fast; swarm and wall colonies cluster; photo colonies seek light;
   lure colonies wait for prey to come; spore-burst and bacillus/myxo colonies spore when beaten.
   A weak pet with a hunter coming for it (hunt me, near) flees. A hungry pet forages or hunts.
-Urgency: 9 = life or death now, 5 = ordinary, 1 = idle."""
+Urgency: 9 = life or death now, 5 = ordinary, 1 = idle.
+What it can say: """ + "; ".join(f"{k} ({v})" for k, v in SAYS.items()) + "."
 
 
 def output_schema():
@@ -77,8 +91,9 @@ def output_schema():
             "goal": {"type": "string", "enum": GOALS},
             "target": {"type": "string", "enum": TARGETS},
             "urgency": {"type": "integer", "minimum": 0, "maximum": 9},
+            "say": {"type": "string", "enum": list(SAYS)},
         },
-        "required": ["goal", "target", "urgency"],
+        "required": ["goal", "target", "urgency", "say"],
     }
 
 
@@ -90,8 +105,8 @@ def others_present(state):
 
 def normalize(obj, state):
     """the teacher's answer as the student's three words, or None if it is not a valid decision"""
-    goal, target, urg = obj.get("goal"), obj.get("target"), obj.get("urgency")
-    if goal not in GOALS or target not in TARGETS:
+    goal, target, urg, say = obj.get("goal"), obj.get("target"), obj.get("urgency"), obj.get("say")
+    if goal not in GOALS or target not in TARGETS or say not in SAYS:
         return None
     urg = urg if isinstance(urg, int) and 0 <= urg <= 9 else 5
     if goal in TARGETED:
@@ -99,7 +114,7 @@ def normalize(obj, state):
             return None                           # a hunt at no one is no decision
     else:
         target = "none"
-    return f"{goal} {target} urgency {urg}"
+    return f"{goal} {target} urgency {urg} say {say}"
 
 
 def ask_raw(host, model, state, timeout=40.0, temperature=0.7):
